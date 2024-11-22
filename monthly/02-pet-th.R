@@ -142,6 +142,8 @@ walk(dates_to_process, \(d){
                 gatt_name = "source_code",
                 gatt_val = "https://github.com/carlosdobler/global-drought-monitor/tree/main/monthly")
     
+    
+    # JOSHUA: CHANGE DEST PATH HERE
     "gsutil mv {dir_data}/{res_file} gs://clim_data_reg_useast1/era5/monthly_means/potential_evapotranspiration_th/" %>% 
       str_glue() %>% 
       system()

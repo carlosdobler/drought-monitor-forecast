@@ -1,9 +1,13 @@
 
+# THIS SCRIPT DOWNLOADS PRECIP AND TAS DATA FROM ERA5
+
+
+
 reticulate::use_condaenv("risk")
 # needs cdsapi python package and file ~/.cdsapirc
 
-date_i <- "2024-10-01"
-date_f <- "2024-10-01"
+date_i <- "2024-11-01"
+date_f <- "2024-11-01"
 
 
 source("https://raw.github.com/carlosdobler/spatial-routines/master/download_data.R")

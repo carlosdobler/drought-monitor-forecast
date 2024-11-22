@@ -14,6 +14,7 @@ library(tidyverse)
 library(stars)
 library(furrr)
 options(future.fork.enable = T)
+options(future.rng.onMisuse = "ignore")
 plan(multicore)
 
 
@@ -98,6 +99,9 @@ walk(dates_to_process, \(d){
                 gatt_name = "source_code",
                 gatt_val = "https://github.com/carlosdobler/global-drought-monitor/tree/main/monthly")
     
+    
+    
+    # JOSHUA: CHANGE DEST PATH HERE
     # upload to gcloud
     str_glue("gsutil mv {res_path} {dir_gs}/water_balance_th/") %>% 
       system(ignore.stdout = T, ignore.stderr = T)

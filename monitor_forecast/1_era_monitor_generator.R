@@ -2,26 +2,23 @@
 # BASED ON A MODIFIED SPEI METHODOLOGY
 # USES THORNWHAITES FORMULATION TO CALCULATE PET
 
-library(tidyverse)
-library(stars)
-library(mirai)
+# library(tidyverse)
+# library(stars)
+# library(mirai)
 
-daemons(parallel::detectCores() - 1)
+# daemons(parallel::detectCores() - 1)
 
+# # special functions
+# source("functions/drought.R")
+# source("functions/general_tools.R")
 
-# special functions
-source("functions/drought.R")
-source("functions/general_tools.R")
+# # load script params:
+# # date to process and temporary data directory
+# source("monitor_forecast/0_params.R")
+# fs::dir_create(dir_data)
 
-# load script params:
-# date to process and temporary data directory
-source("monitor_forecast/0_params.R")
-
-# root bucket dir
-dir_gs <- "gs://clim_data_reg_useast1/era5"
-
-fs::dir_create(dir_data)
-
+# # root bucket dir
+# dir_gs_era <- "gs://clim_data_reg_useast1/era5"
 
 # loop through integration windows
 for (k in winds) {
@@ -69,7 +66,7 @@ for (k in winds) {
     # check if necessary wb dates are available in bucket
     existing_dates_wb <-
       rt_gs_list_files(str_glue(
-        "{dir_gs}/monthly_means/water_balance_th/*.nc"
+        "{dir_gs_era}/monthly_means/water_balance_th/*.nc"
       )) |>
       str_sub(-13, -4)
 
@@ -88,7 +85,7 @@ for (k in winds) {
           f <- str_glue("era5_water-balance-th_mon_{d}.nc")
 
           rt_gs_download_files(
-            str_glue("{dir_gs}/monthly_means/water_balance_th/{f}"),
+            str_glue("{dir_gs_era}/monthly_means/water_balance_th/{f}"),
             dir_data,
             quiet = T
           )
@@ -106,7 +103,7 @@ for (k in winds) {
         set_names() |>
         map(\(var) {
           existing_dates_1_input <-
-            rt_gs_list_files(str_glue("{dir_gs}/monthly_means/{var}")) |>
+            rt_gs_list_files(str_glue("{dir_gs_era}/monthly_means/{var}")) |>
             str_sub(-13, -4)
 
           # existing_dates_1_input <- existing_dates_1_input |> head(-1)
@@ -126,7 +123,7 @@ for (k in winds) {
             f <- str_glue("era5_{str_replace_all(var, '_', '-')}_mon_{d}.nc")
 
             rt_gs_download_files(
-              str_glue("{dir_gs}/monthly_means/{var}/{f}"),
+              str_glue("{dir_gs_era}/monthly_means/{var}/{f}"),
               dir_data,
               quiet = T
             )
@@ -182,7 +179,7 @@ for (k in winds) {
             }
 
             # upload to bucket
-            str_glue("gcloud storage cp {dir_data}/{f} {dir_gs}/monthly_means/{var}/") |>
+            str_glue("gcloud storage cp {dir_data}/{f} {dir_gs_era}/monthly_means/{var}/") |>
               system(ignore.stdout = T, ignore.stderr = T)
           })
       }
@@ -234,7 +231,7 @@ for (k in winds) {
 
           # upload to bucket
           str_glue(
-            "gcloud storage cp {f_res} {dir_gs}/monthly_means/water_balance_th/"
+            "gcloud storage cp {f_res} {dir_gs_era}/monthly_means/water_balance_th/"
           ) |>
             system(ignore.stdout = T, ignore.stderr = T)
         })
@@ -273,7 +270,7 @@ for (k in winds) {
 
     s_dist_params <-
       rt_gs_download_files(
-        str_glue("{dir_gs}/climatologies/{f_distr}"),
+        str_glue("{dir_gs_era}/climatologies/{f_distr}"),
         dir_data,
         quiet = T
       ) |>
@@ -329,11 +326,11 @@ for (k in winds) {
     )
 
     # upload to gcloud
-    # str_glue("gsutil mv {res_path} {dir_gs}/water_balance_th_perc/") |>
+    # str_glue("gsutil mv {res_path} {dir_gs_era}/water_balance_th_perc/") |>
     #   system(ignore.stdout = T, ignore.stderr = T)
     str_glue("gcloud storage mv {res_path} gs://drought-monitor/historical/") |>
       system(ignore.stdout = T, ignore.stderr = T)
   } # end of else (if wb quantile was missing)
 } # end of window loop
 
-fs::dir_delete(dir_data)
+# fs::dir_delete(dir_data)

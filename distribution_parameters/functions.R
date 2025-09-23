@@ -1,5 +1,6 @@
-land_mask <- function(stars_obj) {
-  # reference grid
+land_mask <- function(ref_grid) {
+  # Generates a land mask based on the dimensions/resolution
+  # of ref_grid. Excludes Antarctica.
 
   f_land <- "gs://clim_data_reg_useast1/misc_data/physical/ne_50m_land"
 
@@ -33,21 +34,27 @@ land_mask <- function(stars_obj) {
   # warp raster
   land_r <-
     land_r |>
-    st_warp(stars_obj, method = "max", use_gdal = T) |>
+    st_warp(ref_grid, method = "max", use_gdal = T) |>
     setNames("land")
 
   # format dimensions
-  st_dimensions(land_r) <- st_dimensions(stars_obj)[1:2]
+  st_dimensions(land_r) <- st_dimensions(ref_grid)[1:2]
 
   return(land_r)
 }
 
+
+# *****
 
 load_data <- function(
   dir_origin_cloud, # bucket dir where all vars are located
   dir_dest_local,
   date_vector
 ) {
+  # Downloads data corresponding to date_vector
+  # from dir_origin_cloud into dir_dest_local. Then
+  # loads it into memory
+
   fs::dir_create(dir_dest_local)
 
   # download data
@@ -55,10 +62,12 @@ load_data <- function(
   ff <-
     rt_gs_list_files(dir_origin_cloud) |>
     str_subset(".nc") |>
-    str_subset(str_flatten(
-      seq(year(first(date_vector)), year(last(date_vector))),
-      "|"
-    ))
+    str_subset(
+      str_flatten(
+        seq(year(first(date_vector)), year(last(date_vector))),
+        "|"
+      )
+    )
 
   ff <-
     rt_gs_download_files(ff, dir_dest_local)
@@ -87,7 +96,12 @@ load_data <- function(
 }
 
 
+# *****
+
 distr_params_apply <- function(x, ...) {
+  # Function to be used in distr_params
+  # (inherits arguments from it)
+
   if (any(is.na(x))) {
     params <-
       rep(NA, length(param_names)) |>
@@ -113,6 +127,8 @@ distr_params <- function(
   f_name_root,
   process
 ) {
+  # Fits a distribution, outputs its parameters
+
   fs::dir_create(dir_tmp_local)
 
   param_names <-
@@ -130,7 +146,12 @@ distr_params <- function(
         filter(month(time) == mon) |>
         units::drop_units() |>
 
-        st_apply(c(1, 2), distr_params_apply, FUTURE = T, .fname = "params") |>
+        st_apply(
+          c(1, 2),
+          distr_params_apply,
+          FUTURE = T,
+          .fname = "params"
+        ) |>
         split("params")
     } else if (process == "nmme") {
       r <-
@@ -139,7 +160,7 @@ distr_params <- function(
         units::drop_units() |>
 
         st_apply(
-          c(1, 2, 3),
+          c(1, 2, 3), # pool all members to fit distr
           distr_params_apply,
           FUTURE = T,
           .fname = "params"
@@ -171,6 +192,9 @@ distr_params <- function(
 
 
 rollsum <- function(s, k, suffix_var) {
+  # Calculates a rolling sum of k width over s (stars obj);
+  # names the variable with suffix_var
+
   nn <- str_glue("{suffix_var}{k}")
   dates <- st_get_dimension_values(s, "time")
   un <- s |> pull() |> units::deparse_unit()
@@ -179,7 +203,7 @@ rollsum <- function(s, k, suffix_var) {
     st_apply(
       c(1, 2),
       \(x) {
-        slider::slide_dbl(x, sum, .before = k - 1, .complete = T)
+        slider::slide_dbl(x, .f = sum, .before = k - 1, .complete = T)
       },
       .fname = "time"
     ) |>

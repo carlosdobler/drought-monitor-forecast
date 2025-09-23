@@ -11,10 +11,8 @@ plan(multicore)
 
 
 # load special functions
-source(
-  "https://raw.github.com/carlosdobler/spatial-routines/master/general_tools.R"
-)
-source("monitor_forecast/functions.R")
+source("functions/general_tools.R")
+# source("monitor_forecast/functions.R")
 
 # load nmme models table
 source("monitor_forecast/nmme_sources_df.R")
@@ -84,7 +82,7 @@ for (mod in df_sources$model) {
           ss <-
             do.call(c, c(ss, along = "M"))
 
-          # convert precip units: mm -> m
+          # convert precip units: mm -> m (same as ERA5)
           if (i == "precipitation") {
             ss <-
               ss |>
@@ -158,7 +156,7 @@ for (mod in df_sources$model) {
             )
 
           # write to disk
-          write_nc(r, f)
+          rt_write_nc(r, f)
 
           # move to bucket
           str_glue(

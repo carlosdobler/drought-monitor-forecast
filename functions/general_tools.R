@@ -44,8 +44,16 @@ rt_gs_download_files <- function(f, dest, quiet = F, parallel = T, gsutil = F) {
     #
   } else {
     # identify the parallel engine to use
-    if (parallel & mirai::daemons()$connections > 0) {
-      parallel_ <- "m"
+    if ("mirai" %in% installed.packages()) {
+      if (parallel & mirai::daemons()$connections > 0) {
+        parallel_ <- "m"
+      } else {
+        if (parallel & !is(future::plan(), "sequential")) {
+          parallel_ <- "f"
+        } else {
+          parallel_ <- "none"
+        }
+      }
     } else if (parallel & !is(future::plan(), "sequential")) {
       parallel_ <- "f"
     } else {
@@ -94,7 +102,7 @@ rt_gs_download_files <- function(f, dest, quiet = F, parallel = T, gsutil = F) {
 
       f |>
         furrr::future_walk(\(f_) {
-          stringr::str_glue("{cmd} cp {f_} {dest}") |>
+          stringr::str_glue("{cmd} cp {f_} {dest}", cmd = cmd, dest = dest) |>
             system(ignore.stdout = T, ignore.stderr = T)
         })
     }

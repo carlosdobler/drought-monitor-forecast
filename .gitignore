@@ -1,0 +1,16 @@
+# Dot files and directories
+.*
+!.gitignore
+
+# R specific
+.Rhistory
+.Rapp.history
+.RData
+.Ruserdata
+.Rproj.user/
+*.Rproj
+
+# Output files
+*.html
+*.pdf
+*.docx

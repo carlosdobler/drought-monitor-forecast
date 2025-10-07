@@ -10,7 +10,7 @@ source("functions/general_tools.R")
 
 # load script params:
 # date to process and temporary data directory
-source("monitor_forecast/0_params.R")
+source("monitor_forecast/pipeline_params.R")
 fs::dir_create(dir_data)
 
 # key bucket directories

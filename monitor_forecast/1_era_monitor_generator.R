@@ -2,24 +2,6 @@
 # BASED ON A MODIFIED SPEI METHODOLOGY
 # USES THORNWHAITES FORMULATION TO CALCULATE PET
 
-# library(tidyverse)
-# library(stars)
-# library(mirai)
-
-# daemons(parallel::detectCores() - 1)
-
-# # special functions
-# source("functions/drought.R")
-# source("functions/general_tools.R")
-
-# # load script params:
-# # date to process and temporary data directory
-# source("monitor_forecast/0_params.R")
-# fs::dir_create(dir_data)
-
-# # root bucket dir
-# dir_gs_era <- "gs://clim_data_reg_useast1/era5"
-
 # loop through integration windows
 for (k in winds) {
   message(str_glue("*** PROCESSING {date_to_proc} (window = {k}) ***"))
@@ -295,7 +277,7 @@ for (k in winds) {
         .fname = "perc"
       )
 
-    # check with spei csic
+    # generte plot to check with spei csic
     # s_perc |>
     #   st_warp(st_as_stars(st_bbox(), dx = 0.25, values = NA)) |>
     #   as_tibble() |>

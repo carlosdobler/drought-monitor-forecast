@@ -6,33 +6,21 @@
 
 # SETUP -----------------------------------------------------------------------
 
-# library(tidyverse)
-# library(stars)
-# library(mirai)
-
-# daemons(parallel::detectCores() - 1)
-
-# # special functions
-# source("functions/drought.R")
-# source("functions/general_tools.R")
-
-# # load script params:
-# # date to process and temporary data directory
-# source("monitor_forecast/0_params.R")
-
-# key bucket directories
-# dir_gs_era <- "gs://clim_data_reg_useast1/era5"
-# dir_gs_nmme <- "gs://clim_data_reg_useast1/nmme/climatologies"
-
 # load nmme data source table
 source("monitor_forecast/nmme_sources_df.R")
 
-# forecast should start 1 month later
-date_to_proc <- as.character(as_date(date_to_proc) + months(1))
+# NMME will generate a forecast with IC = start of a month
+# lead months correspond to following months
+# this means:
+# - by mid-month m, ERA5 data will already be available for m-1
+# - NMME data will be available for m (i.e. date in file name = IC)
+# - actual months in NMME data will be predictions for m+1, m+2, m+3 ...
 
-# date to process plus 5 lead months
-date_to_proc <- as_date(date_to_proc)
-dates_fcst <- seq(date_to_proc, date_to_proc + months(5), by = "1 month")
+# date_to_proc <- as.character(as_date(date_to_proc) + months(1))
+
+# date to process = IC; dates of forecast = 6 lead months
+date_ic <- as_date(date_to_proc)
+dates_fcst <- seq(date_ic + months(1), date_ic + months(6), by = "1 month")
 
 
 # generate heat index constants
@@ -58,6 +46,7 @@ vars_era <-
 
 ff_era <-
   map(vars_era, \(var) {
+    #
     f <-
       rt_gs_list_files(str_glue("{dir_gs_era}/climatologies")) |>
       str_subset(str_glue("_{var}_")) |>
@@ -84,6 +73,7 @@ ff_era <-
 era_params <-
   ff_era |>
   map(\(f) {
+    #
     s <-
       f |>
       set_names(f |> str_sub(-5, -4)) |>
@@ -103,7 +93,7 @@ dates_era <-
   winds |>
   set_names() |>
   map(\(k) {
-    seq(date_to_proc - months(k - 1), date_to_proc - months(1), by = "1 month")
+    seq(dates_fcst[1] - months(k - 1), dates_fcst[1] - months(1), by = "1 month")
   })
 
 
@@ -167,10 +157,10 @@ walk(df_sources$model |> set_names(), \(mod) {
       # download and read nmme forecast
 
       url <-
-        nmme_url_generator(mod, date_to_proc, var, df = df_sources)
+        nmme_url_generator(mod, date_ic, var, df = df_sources)
 
       f <-
-        str_glue("{dir_data}/nmme_{mod}_{var_l}_mon_{date_to_proc}_plus5_pre.nc")
+        str_glue("{dir_data}/nmme_{mod}_{var_l}_mon_{date_ic}_plus5_pre.nc")
 
       a <- "a" # empty vector
       class(a) <- "try-error" # assign error class
@@ -195,25 +185,32 @@ walk(df_sources$model |> set_names(), \(mod) {
       }
 
       fcst <-
-        nmme_formatter(f, var) |>
-        st_set_dimensions("L", values = dates_fcst)
+        nmme_formatter(f, var)
+
+      # *****
+      # save model data for future applications
+
+      f_formatted <-
+        f |> str_replace("_pre.nc$", ".nc")
+
+      rt_write_nc(fcst, f_formatted)
+
+      str_glue(
+        "gcloud storage mv {f_formatted} gs://clim_data_reg_useast1/nmme/monthly/{mod}/{str_replace(var_l, '-', '_')}/"
+      ) |>
+        system(ignore.stdout = T, ignore.stderr = T)
+
+      # *****
 
       if (var == "prec") {
         fcst <-
           fcst |>
-          mutate(prec = prec |> units::set_units(m / d))
+          mutate(prec = prec |> units::set_units(m / d)) # match ERA5 units
       }
 
-      # save model data for future applications
-      f_fcst <- str_glue("nmme_{mod}_{var_l}_mon_{date_to_proc}_plus5.nc")
-      f_fcst_dir <- str_glue("{dir_data}/{f_fcst}")
-
-      rt_write_nc(fcst, f_fcst_dir)
-
-      str_glue(
-        "gcloud storage mv {f_fcst_dir} gs://clim_data_reg_useast1/nmme/monthly/{mod}/{str_replace(var_l, '-', '_')}/"
-      ) |>
-        system(ignore.stdout = T, ignore.stderr = T)
+      fcst <-
+        fcst |>
+        st_set_dimensions("L", values = dates_fcst)
 
       fs::file_delete(f)
 
@@ -223,26 +220,24 @@ walk(df_sources$model |> set_names(), \(mod) {
         case_when(
           var == "prec" ~
             str_glue(
-              "nmme_{mod}_{var_l}_mon_gamma-params_1991-2020_{str_sub(date_to_proc, 6,7)}_plus5.nc"
+              "{dir_gs_nmme}/{mod}/nmme_{mod}_{var_l}_mon_gamma-params_1991-2020_{str_sub(date_ic, 6,7)}_plus5.nc"
             ),
           var == "tref" ~
             str_glue(
-              "nmme_{mod}_{var_l}_mon_norm-params_1991-2020_{str_sub(date_to_proc, 6,7)}_plus5.nc"
+              "{dir_gs_nmme}/{mod}/nmme_{mod}_{var_l}_mon_norm-params_1991-2020_{str_sub(date_ic, 6,7)}_plus5.nc"
             )
         )
 
-      str_glue(
-        "gcloud storage cp {dir_gs_nmme}/{mod}/{f_nmme_params} {dir_data}"
-      ) |>
-        system(ignore.stdout = T, ignore.stderr = T)
+      f_nmme_params <-
+        f_nmme_params |>
+        rt_gs_download_files(dir_data, quiet = T)
 
       nmme_params <-
-        str_glue("{dir_data}/{f_nmme_params}") |>
-        read_ncdf() |>
-        suppressMessages() |>
+        f_nmme_params |>
+        read_mdim() |>
         st_set_dimensions("L", values = dates_fcst)
 
-      fs::file_delete(str_glue("{dir_data}/{f_nmme_params}"))
+      fs::file_delete(f_nmme_params)
 
       ### BIAS CORRECTION -----------------------------------------------------
 
@@ -250,7 +245,7 @@ walk(df_sources$model |> set_names(), \(mod) {
 
       s_1var <-
         map(seq_along(dates_fcst), \(d_fcst_in) {
-          # d_fcst_in <- 2
+          # d_fcst_in <- 1
 
           print(str_glue("* * * LEAD {d_fcst_in} / {length(dates_fcst)}"))
 
@@ -275,6 +270,7 @@ walk(df_sources$model |> set_names(), \(mod) {
           s_bias_adj_1mon <-
             # loop through members
             map(seq(dim(fcst_1mon)[3]), \(mem) {
+              #
               print(str_glue("* * * * MEMBER {mem} / {dim(fcst_1mon)[3]}"))
 
               # calculate quantile of nmme data
@@ -294,7 +290,6 @@ walk(df_sources$model |> set_names(), \(mod) {
                       if (var == "prec") {
                         if (x[2] == -9999) {
                           # no precip in historical period
-
                           NA
                         } else {
                           # a quantile of 1 or of 0 throws an error when converting to level
@@ -361,6 +356,7 @@ walk(df_sources$model |> set_names(), \(mod) {
       s_1var <-
         do.call(c, c(s_1var, along = "L"))
 
+      # *****
       # save ba model data for future applications
 
       v_name <- names(s_1var)
@@ -368,19 +364,21 @@ walk(df_sources$model |> set_names(), \(mod) {
 
       s_1var_f <-
         s_1var |>
-        st_set_dimensions("L", values = as_date(dates_fcst)) |>
+        # st_set_dimensions("L", values = as_date(dates_fcst)) |>
         aperm(c(1, 2, 4, 3)) |>
         mutate(!!sym(v_name) := units::set_units(!!sym(v_name), !!v_un))
 
-      f_fcst <- str_glue("nmme_{mod}_{var_l}_mon_{date_to_proc}_plus5_biasadj.nc")
-      f_fcst_dir <- str_glue("{dir_data}/{f_fcst}")
+      f_fcst <-
+        str_glue("{dir_data}/nmme_{mod}_{var_l}_mon_{date_ic}_plus5_biasadj.nc")
 
-      rt_write_nc(s_1var_f, f_fcst_dir)
+      rt_write_nc(s_1var_f, f_fcst)
 
       str_glue(
-        "gcloud storage mv {f_fcst_dir} gs://clim_data_reg_useast1/nmme/monthly/{mod}/{str_replace(var_l, '-', '_')}_biasadj/"
+        "gcloud storage mv {f_fcst} gs://clim_data_reg_useast1/nmme/monthly/{mod}/{str_replace(var_l, '-', '_')}_biasadj/"
       ) |>
         system(ignore.stdout = T, ignore.stderr = T)
+
+      # *****
 
       return(s_1var)
     })
@@ -565,7 +563,7 @@ wb_quantiles_stats <-
 c(3, 12) |>
   iwalk(\(k, i) {
     f_name <- str_glue(
-      "{dir_data}/nmme_ensemble_water-balance-perc-w{k}_mon_{date_to_proc}_plus5_{num_models}models.nc"
+      "{dir_data}/nmme_ensemble_water-balance-perc-w{k}_mon_{date_ic}_plus5_{num_models}models.nc"
     )
 
     rt_write_nc(

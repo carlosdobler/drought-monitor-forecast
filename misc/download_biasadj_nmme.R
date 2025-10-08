@@ -4,7 +4,8 @@
 # 2. BIAS ADJUST AND SAVE RESULTS TO BUCKET
 # SCRIPT BASED ON monitor_forecast/2_nmme_forecast_generator
 # BUT RUN FOR ALL NMME DATA AVAILABLE AFTER 2020 (END OF BASELINE PERIOD;
-# BASELINE PERIOD ALREADY PROCESSED WITH distribution_parameters/02_* SCRIPTS
+# BASELINE PERIOD ALREADY DOWNLOADED AND FORMATTED WITH
+# distribution_parameters/02_* SCRIPTS (BUT NOT BIAS ADJUSTED!)
 
 library(tidyverse)
 library(stars)
@@ -141,7 +142,7 @@ ff_nmme |>
 message(str_glue("BIAS CORRECTING..."))
 
 # loop through models
-walk(df_sources$model |> tail(-1) |> set_names(), \(mod) {
+walk(df_sources$model |> set_names(), \(mod) {
   # mod <- df_sources$model[1]
 
   print(str_glue(" "))

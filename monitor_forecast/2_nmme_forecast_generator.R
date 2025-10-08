@@ -100,7 +100,7 @@ dates_era <-
 # load wb months for tas and pr for rolling sums
 # (already available in dir_data from monitor script)
 
-era_Xmonths_wb_2 <-
+era_Xmonths_wb <-
   map(dates_era, \(dd) {
     map(dd, \(d) {
       str_glue("{dir_data}/era5_water-balance-th_mon_{d}.nc") |>
@@ -127,7 +127,7 @@ message(str_glue("BIAS CORRECTING..."))
 
 # loop through models
 walk(df_sources$model |> set_names(), \(mod) {
-  # mod <- df_sources$model[4]
+  # mod <- df_sources$model[2]
 
   print(str_glue(" "))
   print(str_glue(
@@ -208,10 +208,6 @@ walk(df_sources$model |> set_names(), \(mod) {
           mutate(prec = prec |> units::set_units(m / d)) # match ERA5 units
       }
 
-      fcst <-
-        fcst |>
-        st_set_dimensions("L", values = dates_fcst)
-
       fs::file_delete(f)
 
       # download and read model's distr params
@@ -234,8 +230,7 @@ walk(df_sources$model |> set_names(), \(mod) {
 
       nmme_params <-
         f_nmme_params |>
-        read_mdim() |>
-        st_set_dimensions("L", values = dates_fcst)
+        read_mdim()
 
       fs::file_delete(f_nmme_params)
 
@@ -328,7 +323,7 @@ walk(df_sources$model |> set_names(), \(mod) {
                 merge() |>
                 st_apply(
                   c(1, 2),
-                  \(x) {
+                  \(x, var) {
                     if (any(is.na(x))) {
                       NA
                     } else if (x[2] == -9999) {
@@ -341,6 +336,8 @@ walk(df_sources$model |> set_names(), \(mod) {
                       }
                     }
                   },
+                  CLUSTER = cl,
+                  var = var,
                   .fname = {{ var }}
                 )
 
@@ -397,6 +394,7 @@ walk(df_sources$model |> set_names(), \(mod) {
 print(str_glue("CALCULATING WB AND ANOMALIES..."))
 
 walk(df_sources$model |> set_names(), \(mod) {
+  # mod = df_sources$model[3]
   message(" ")
   message(str_glue(
     "* MODEL {which(mod == df_sources$model)} / {nrow(df_sources)}"
@@ -411,7 +409,7 @@ walk(df_sources$model |> set_names(), \(mod) {
     map(seq(dim(s_1model)["M"]), \(mem) {
       # mem = 1
 
-      # print(str_glue("* * MEMBER {mem} / {dim(s_1model)['M']}"))
+      message(str_glue("* * MEMBER {mem} / {dim(s_1model)['M']}"))
 
       # tas and pr data
       s_vars <-
@@ -452,16 +450,17 @@ walk(df_sources$model |> set_names(), \(mod) {
 
           s |>
             st_apply(
-              # PARALLELIZE HERE
               c(1, 2),
+              # \(x, k) {
               \(x) {
                 if (any(is.na(x))) {
                   rep(NA, length(x))
                 } else {
-                  # zoo::rollsum(x, k = 3, fill = NA, align = "right")
                   slider::slide_dbl(x, .f = sum, .before = k - 1, .complete = T)
                 }
               },
+              # CLUSTER = cl,
+              # k = k,
               .fname = "L"
             ) |>
             aperm(c(2, 3, 1)) |>
@@ -474,6 +473,7 @@ walk(df_sources$model |> set_names(), \(mod) {
       s_wb_quantile <-
         s_wb_rolled |>
         imap(\(s, k) {
+          #
           p <- str_glue("wb_rollsum{k}")
 
           c(s, pluck(era_params, p)) |>
@@ -484,11 +484,11 @@ walk(df_sources$model |> set_names(), \(mod) {
                 if (any(is.na(x))) {
                   NA
                 } else {
-                  lmom::cdfglo(x[1], c(x[2], x[3], x[4]))
+                  max(min(lmom::cdfglo(x[1], c(x[2], x[3], x[4])), 0.999), 0.001)
                 }
               },
-              .fname = "perc",
-              FUTURE = F
+              # CLUSTER = cl,
+              .fname = "perc"
             ) |>
             setNames(str_glue("perc_{k}"))
         })
@@ -509,8 +509,6 @@ walk(df_sources$model |> set_names(), \(mod) {
 ff_wb_quantiles_all_models <-
   # str_glue("{dir_data}/wb-quantiles_{df_sources$model}.rds")                # **********
   fs::dir_ls(dir_data, regexp = "wb-quantiles_")
-
-num_models <- length(ff_wb_quantiles_all_models)
 
 wb_quantiles <-
   ff_wb_quantiles_all_models |>
@@ -563,14 +561,12 @@ wb_quantiles_stats <-
 c(3, 12) |>
   iwalk(\(k, i) {
     f_name <- str_glue(
-      "{dir_data}/nmme_ensemble_water-balance-perc-w{k}_mon_{date_ic}_plus5_{num_models}models.nc"
+      "{dir_data}/nmme_ensemble_water-balance-perc-w{k}_mon_ic-{date_ic}_leads-6.nc"
     )
 
     rt_write_nc(
       wb_quantiles_stats |> select(i) |> split("stats"),
-      f_name,
-      gatt_name = "source code",
-      gatt_val = "https://github.com/carlosdobler/drought/drought_monitor"
+      f_name
     )
 
     "gcloud storage mv {f_name} gs://drought-monitor/forecast/" |>

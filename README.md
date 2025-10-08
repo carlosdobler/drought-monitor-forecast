@@ -33,4 +33,4 @@ This project calculates monthly water balance conditions and forecasts to suppor
 
 ### 🚀 Usage
 
-The pipeline is designed to run monthly: `Rscript monitor_forecast/RUN_PIPELINE.R`
+The pipeline is designed to run monthly: `Rscript monitor_forecast/RUN_PIPELINE.R "YYYY-MM"`

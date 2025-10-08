@@ -3,6 +3,11 @@ library(stars)
 library(mirai)
 
 daemons(parallel::detectCores() - 1)
+cl <- make_cluster(parallel::detectCores() - 1)
+
+# get date
+args <- commandArgs(trailingOnly = TRUE)
+date_to_proc <- str_glue("{args[1]}-01")
 
 # load special functions
 source("functions/drought.R")
@@ -25,3 +30,5 @@ source("monitor_forecast/2_nmme_forecast_generator.R")
 
 # delete temporary data directory
 fs::dir_delete(dir_data)
+
+stop_cluster(cl)

@@ -1,4 +1,4 @@
-date_to_proc <- "2025-08-01"
+# date_to_proc <- "2025-09-01"
 
 dir_data <- "/mnt/pers_disk/tmp_monitor"
 

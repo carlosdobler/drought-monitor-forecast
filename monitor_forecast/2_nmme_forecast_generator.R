@@ -160,7 +160,7 @@ walk(df_sources$model |> set_names(), \(mod) {
         nmme_url_generator(mod, date_ic, var, df = df_sources)
 
       f <-
-        str_glue("{dir_data}/nmme_{mod}_{var_l}_mon_{date_ic}_plus5_pre.nc")
+        str_glue("{dir_data}/nmme_{mod}_{var_l}_mon_ic-{date_ic}_leads-6_pre.nc")
 
       a <- "a" # empty vector
       class(a) <- "try-error" # assign error class
@@ -216,11 +216,11 @@ walk(df_sources$model |> set_names(), \(mod) {
         case_when(
           var == "prec" ~
             str_glue(
-              "{dir_gs_nmme}/{mod}/nmme_{mod}_{var_l}_mon_gamma-params_1991-2020_{str_sub(date_ic, 6,7)}_plus5.nc"
+              "{dir_gs_nmme}/{mod}/nmme_{mod}_{var_l}_mon_gamma-params_1991-2020_{str_sub(date_ic, 6,7)}_leads-6.nc"
             ),
           var == "tref" ~
             str_glue(
-              "{dir_gs_nmme}/{mod}/nmme_{mod}_{var_l}_mon_norm-params_1991-2020_{str_sub(date_ic, 6,7)}_plus5.nc"
+              "{dir_gs_nmme}/{mod}/nmme_{mod}_{var_l}_mon_norm-params_1991-2020_{str_sub(date_ic, 6,7)}_leads-6.nc"
             )
         )
 
@@ -366,7 +366,7 @@ walk(df_sources$model |> set_names(), \(mod) {
         mutate(!!sym(v_name) := units::set_units(!!sym(v_name), !!v_un))
 
       f_fcst <-
-        str_glue("{dir_data}/nmme_{mod}_{var_l}_mon_{date_ic}_plus5_biasadj.nc")
+        str_glue("{dir_data}/nmme_{mod}_{var_l}_mon_ic-{date_ic}_leads-6_biasadj.nc")
 
       rt_write_nc(s_1var_f, f_fcst)
 

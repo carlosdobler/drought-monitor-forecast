@@ -147,11 +147,11 @@ for (mod in df_sources$model) {
             case_when(
               i == "average_temperature" ~
                 str_glue(
-                  "{dir_tmp}/nmme_{mod}_average-temperature_mon_norm-params_1991-2020_{mon}_plus5.nc"
+                  "{dir_tmp}/nmme_{mod}_average-temperature_mon_norm-params_1991-2020_{mon}_leads-6.nc"
                 ),
               i == "precipitation" ~
                 str_glue(
-                  "{dir_tmp}/nmme_{mod}_precipitation_mon_gamma-params_1991-2020_{mon}_plus5.nc"
+                  "{dir_tmp}/nmme_{mod}_precipitation_mon_gamma-params_1991-2020_{mon}_leads-6.nc"
                 )
             )
 

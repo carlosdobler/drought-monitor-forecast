@@ -31,7 +31,7 @@ walk2(vars, vars_long, \(var, var_l) {
         nmme_url_generator(mod, d, var, df = df_sources)
 
       f <-
-        str_glue("{dir_data}/nmme_{mod}_{var_l}_mon_{as_date(d)}_plus5_pre.nc")
+        str_glue("{dir_data}/nmme_{mod}_{var_l}_mon_ic-{as_date(d)}_leads-6_pre.nc")
 
       a <- "a" # empty vector
       class(a) <- "try-error" # assign error class

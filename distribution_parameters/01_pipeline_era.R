@@ -1,7 +1,6 @@
 # - SCRIPT TO OBTAIN DISTRIBUTION PARAMETERS OF BASELINE (1991-2020) ERA5 DATA
 # - PARAMETERS OF TEMPERATURE AND PRECIP ARE USED TO BIAS-CORRECT NMME DATA
-# - PARAMETERS OF WB (DIFFERENT INTEGRATION WINDOWS) ARE USED TO CALCULATE
-#   WB ANOMALIES (PERCENTILES)
+# - PARAMETERS OF WB (VARIABLE INTEGRATION WINDOWS) ARE USED TO CALCULATE WB ANOMALIES (PERCENTILES)
 
 # SET UP ----------------------------------------------------------------------
 
@@ -19,10 +18,10 @@ plan(multicore)
 source("functions/general_tools.R")
 
 # load general drought functions
-source("functions/drought.R")
+source("functions/functions_drought.R")
 
-# load project functions
-source("distribution_parameters/functions.R")
+# load distribution functions
+source("functions/functions_distributions.R")
 
 
 # PROCESS ---------------------------------------------------------------------

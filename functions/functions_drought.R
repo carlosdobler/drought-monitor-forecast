@@ -108,7 +108,7 @@ wb_calculator_th <- function(d, s_tas, s_pr, heat_vars) {
 
 # *****
 
-nmme_url_generator <- function(model, date, variable, lead = 5, df) {
+nmme_url_generator <- function(model, date, variable, lead = 6, df) {
   # Function to generate an url to download forecast data from IRI
 
   # ARGUMENTS:
@@ -144,14 +144,14 @@ nmme_url_generator <- function(model, date, variable, lead = 5, df) {
 
   # glue everything together
   stringr::str_glue(
-    "https://iridl.ldeo.columbia.edu/SOURCES/.Models/.NMME/.{model_cast}/.MONTHLY/.{variable}/L/%280.5%29%28{lead}.5%29RANGEEDGES/S/%280000%201%20{format(d,'%b')}%20{lubridate::year(d)}%29VALUES/M/%281.0%29%2810.0%29RANGEEDGES/data.nc"
+    "https://iridl.ldeo.columbia.edu/SOURCES/.Models/.NMME/.{model_cast}/.MONTHLY/.{variable}/L/%280.5%29%28{lead-1}.5%29RANGEEDGES/S/%280000%201%20{format(d,'%b')}%20{lubridate::year(d)}%29VALUES/M/%281.0%29%2810.0%29RANGEEDGES/data.nc"
   )
 }
 
 
 # *****
 
-nmme_formatter <- function(f, variable, lead = 5) {
+nmme_formatter <- function(f, variable, lead = 6) {
   # Function to format IRI's ncdfs into a simpler form:
   # four dimensions only (lat, lon, member, lead) and with
   # existing units
@@ -173,16 +173,23 @@ nmme_formatter <- function(f, variable, lead = 5) {
   s <-
     f |>
     stars::read_mdim() |>
-    suppressMessages() |>
     suppressWarnings() |>
     abind::adrop() |>
-    stars::st_set_dimensions("L", values = seq(lead + 1)) # simplify lead dimension
+    stars::st_set_dimensions("L", values = seq(lead)) # simplify lead dimension
 
   if (un == "Kelvin_scale") {
     s <-
       s |>
+      units::drop_units() |>
       dplyr::mutate(
         !!sym(variable) := units::set_units(!!sym(variable), K)
+      )
+  } else if (un == "mm/day") {
+    s <-
+      s |>
+      units::drop_units() |>
+      dplyr::mutate(
+        !!sym(variable) := units::set_units(!!sym(variable), mm / d)
       )
   }
 

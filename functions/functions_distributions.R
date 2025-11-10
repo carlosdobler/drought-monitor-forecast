@@ -55,7 +55,9 @@ load_data <- function(
   # from dir_origin_cloud into dir_dest_local. Then
   # loads it into memory
 
-  fs::dir_create(dir_dest_local)
+  if (!fs::dir_exists(dir_dest_local)) {
+    fs::dir_create(dir_dest_local)
+  }
 
   # download data
 
@@ -76,9 +78,9 @@ load_data <- function(
 
   ss <-
     ff |>
-    future_map(\(f) {
-      read_ncdf(f) |>
-        suppressMessages() |>
+    map(\(f) {
+      f |>
+        read_mdim() |>
         adrop()
     })
 
@@ -98,26 +100,28 @@ load_data <- function(
 
 # *****
 
-distr_params_apply <- function(x, ...) {
+distr_params_apply <- function(x, param_names, distribution) {
   # Function to be used in distr_params
   # (inherits arguments from it)
 
   if (any(is.na(x))) {
     params <-
       rep(NA, length(param_names)) |>
-      set_names(param_names)
-  } else if (length(unique(x)) == 1) {
+      purrr::set_names(param_names)
+  } else if (mean(x == 0) > 0.9) {
     params <-
       rep(-9999, length(param_names)) |>
-      set_names(param_names)
+      purrr::set_names(param_names)
   } else {
     params <-
-      distribution(samlmu(x))
+      distribution(lmom::samlmu(x))
   }
 
   return(params)
 }
 
+
+# *****
 
 distr_params <- function(
   s,
@@ -129,18 +133,21 @@ distr_params <- function(
 ) {
   # Fits a distribution, outputs its parameters
 
+  cl <- mirai::make_cluster(parallel::detectCores() - 1)
+
   fs::dir_create(dir_tmp_local)
 
   param_names <-
-    sample(10, 100, replace = T) |>
+    sample(10, 10, replace = T) |>
     samlmu() |>
     distribution() |>
     names()
 
   walk(seq(12), \(mon) {
-    print(str_glue("fitting month {mon}"))
+    print(str_glue("fitting month {mon} / 12"))
 
     if (process == "era") {
+      #
       r <-
         s |>
         filter(month(time) == mon) |>
@@ -149,11 +156,15 @@ distr_params <- function(
         st_apply(
           c(1, 2),
           distr_params_apply,
-          FUTURE = T,
+          param_names = param_names,
+          distribution = distribution,
+          CLUSTER = cl,
           .fname = "params"
         ) |>
         split("params")
+      #
     } else if (process == "nmme") {
+      #
       r <-
         s |>
         filter(month(time) == mon) |>
@@ -162,10 +173,13 @@ distr_params <- function(
         st_apply(
           c(1, 2, 3), # pool all members to fit distr
           distr_params_apply,
-          FUTURE = T,
+          param_names = param_names,
+          distribution = distribution,
+          CLUSTER = cl,
           .fname = "params"
         ) |>
         split("params")
+      #
     }
 
     # save results
@@ -175,19 +189,15 @@ distr_params <- function(
         "{dir_tmp_local}/{f_name_root}_{str_pad(mon, 2, 'left', '0')}.nc"
       )
 
-    rt_write_nc(
-      r,
-      f,
-      gatt_name = "source code",
-      gatt_val = "https://github.com/carlosdobler/drought/distribution_parameters"
-    )
+    rt_write_nc(r, f)
 
-    # # move to cloud
-    # str_glue("gcloud storage mv {f} {dir_output_cloud}") |>
-    #   system(ignore.stdout = T, ignore.stderr = T)
+    # move to cloud
+    str_glue("gcloud storage mv {f} {dir_output_cloud}") |>
+      system(ignore.stdout = T, ignore.stderr = T)
   })
 
-  # fs::dir_delete(dir_tmp_local)
+  fs::dir_delete(dir_tmp_local)
+  mirai::stop_cluster(cl)
 }
 
 

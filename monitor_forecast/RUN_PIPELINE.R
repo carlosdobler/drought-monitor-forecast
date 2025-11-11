@@ -10,7 +10,7 @@ args <- commandArgs(trailingOnly = TRUE)
 date_to_proc <- str_glue("{args[1]}-01")
 
 # load special functions
-source("functions/drought.R")
+source("functions/functions_drought.R")
 source("functions/general_tools.R")
 
 # load script params:

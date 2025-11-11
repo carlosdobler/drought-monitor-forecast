@@ -127,7 +127,7 @@ message(str_glue("BIAS CORRECTING..."))
 
 # loop through models
 walk(df_sources$model |> set_names(), \(mod) {
-  # mod <- df_sources$model[2]
+  # mod <- df_sources$model[3]
 
   print(str_glue(" "))
   print(str_glue(
@@ -181,6 +181,7 @@ walk(df_sources$model |> set_names(), \(mod) {
 
       if (class(a) == "try-error") {
         message("      download failed after 10 attempts - moving on to next variable or model...")
+        fs::file_delete(f)
         return(NULL)
       }
 
@@ -380,12 +381,13 @@ walk(df_sources$model |> set_names(), \(mod) {
       return(s_1var)
     })
 
-  # merge pr and tas
+  if (all(s_1model |> map_lgl(\(x) !is.null(x)))) {
+    # merge pr and tas
+    s_1model <-
+      do.call(c, unname(s_1model))
 
-  s_1model <-
-    do.call(c, unname(s_1model))
-
-  write_rds(s_1model, str_glue("{dir_data}/bias-corr-vars_{mod}.rds"))
+    write_rds(s_1model, str_glue("{dir_data}/bias-corr-vars_{mod}.rds"))
+  }
 })
 
 
@@ -394,113 +396,118 @@ walk(df_sources$model |> set_names(), \(mod) {
 print(str_glue("CALCULATING WB AND ANOMALIES..."))
 
 walk(df_sources$model |> set_names(), \(mod) {
-  # mod = df_sources$model[3]
+  # mod = df_sources$model[4]
   message(" ")
   message(str_glue(
     "* MODEL {which(mod == df_sources$model)} / {nrow(df_sources)}"
   ))
 
   s_1model <-
-    str_glue("{dir_data}/bias-corr-vars_{mod}.rds") |>
-    read_rds()
+    str_glue("{dir_data}/bias-corr-vars_{mod}.rds")
 
-  s_1model_wb <-
-    # loop through members
-    map(seq(dim(s_1model)["M"]), \(mem) {
-      # mem = 1
+  if (fs::file_exists(s_1model)) {
+    s_1model <-
+      s_1model |>
+      read_rds()
 
-      message(str_glue("* * MEMBER {mem} / {dim(s_1model)['M']}"))
+    s_1model_wb <-
+      # loop through members
+      map(seq(dim(s_1model)["M"]), \(mem) {
+        # mem = 1
 
-      # tas and pr data
-      s_vars <-
-        s_1model |>
-        slice(M, mem)
+        message(str_glue("* * MEMBER {mem} / {dim(s_1model)['M']}"))
 
-      # calculate wb for 6 lead months
-      ss_1mem <-
-        map(seq(dim(s_vars)["L"]), \(d_fcst_in) {
-          wb_calculator_th(
-            dates_fcst[d_fcst_in],
-            s_vars |>
-              select(tref) |>
-              slice(L, d_fcst_in) |>
-              setNames("tas") |>
-              mutate(
-                tas = tas |> units::set_units(K) |> units::set_units(degC)
-              ),
-            s_vars |>
-              select(prec) |>
-              slice(L, d_fcst_in) |>
-              setNames("pr") |>
-              mutate(pr = pr |> units::set_units(m)),
-            heat_vars
-          )
-        })
+        # tas and pr data
+        s_vars <-
+          s_1model |>
+          slice(M, mem)
 
-      # merge ERA 2 months wb with nmme 6 months
-      s_wb_era_nmme <-
-        era_Xmonths_wb |>
-        map(\(e) do.call(c, c(c(e, ss_1mem), along = "L")))
+        # calculate wb for 6 lead months
+        ss_1mem <-
+          map(seq(dim(s_vars)["L"]), \(d_fcst_in) {
+            wb_calculator_th(
+              dates_fcst[d_fcst_in],
+              s_vars |>
+                select(tref) |>
+                slice(L, d_fcst_in) |>
+                setNames("tas") |>
+                mutate(
+                  tas = tas |> units::set_units(K) |> units::set_units(degC)
+                ),
+              s_vars |>
+                select(prec) |>
+                slice(L, d_fcst_in) |>
+                setNames("pr") |>
+                mutate(pr = pr |> units::set_units(m)),
+              heat_vars
+            )
+          })
 
-      # rollsum
-      s_wb_rolled <-
-        s_wb_era_nmme |>
-        imap(\(s, k) {
-          k <- as.numeric(k)
+        # merge ERA 2 months wb with nmme 6 months
+        s_wb_era_nmme <-
+          era_Xmonths_wb |>
+          map(\(e) do.call(c, c(c(e, ss_1mem), along = "L")))
 
-          s |>
-            st_apply(
-              c(1, 2),
-              # \(x, k) {
-              \(x) {
-                if (any(is.na(x))) {
-                  rep(NA, length(x))
-                } else {
-                  slider::slide_dbl(x, .f = sum, .before = k - 1, .complete = T)
-                }
-              },
-              # CLUSTER = cl,
-              # k = k,
-              .fname = "L"
-            ) |>
-            aperm(c(2, 3, 1)) |>
-            slice(L, -seq(k - 1)) |> # remove traling 2 first months
-            st_set_dimensions("L", values = dates_fcst) |>
-            setNames(str_glue("wb_rollsum{k}"))
-        })
+        # rollsum
+        s_wb_rolled <-
+          s_wb_era_nmme |>
+          imap(\(s, k) {
+            k <- as.numeric(k)
 
-      # calculate quantiles with ERA5 distr parameters
-      s_wb_quantile <-
-        s_wb_rolled |>
-        imap(\(s, k) {
-          #
-          p <- str_glue("wb_rollsum{k}")
+            s |>
+              st_apply(
+                c(1, 2),
+                # \(x, k) {
+                \(x) {
+                  if (any(is.na(x))) {
+                    rep(NA, length(x))
+                  } else {
+                    slider::slide_dbl(x, .f = sum, .before = k - 1, .complete = T)
+                  }
+                },
+                # CLUSTER = cl,
+                # k = k,
+                .fname = "L"
+              ) |>
+              aperm(c(2, 3, 1)) |>
+              slice(L, -seq(k - 1)) |> # remove traling 2 first months
+              st_set_dimensions("L", values = dates_fcst) |>
+              setNames(str_glue("wb_rollsum{k}"))
+          })
 
-          c(s, pluck(era_params, p)) |>
-            merge() |>
-            st_apply(
-              c(1, 2, 3),
-              \(x) {
-                if (any(is.na(x))) {
-                  NA
-                } else {
-                  max(min(lmom::cdfglo(x[1], c(x[2], x[3], x[4])), 0.999), 0.001)
-                }
-              },
-              # CLUSTER = cl,
-              .fname = "perc"
-            ) |>
-            setNames(str_glue("perc_{k}"))
-        })
+        # calculate quantiles with ERA5 distr parameters
+        s_wb_quantile <-
+          s_wb_rolled |>
+          imap(\(s, k) {
+            #
+            p <- str_glue("wb_rollsum{k}")
 
-      # return(s_wb_quantile)
-      do.call(c, s_wb_quantile |> unname())
-    })
+            c(s, pluck(era_params, p)) |>
+              merge() |>
+              st_apply(
+                c(1, 2, 3),
+                \(x) {
+                  if (any(is.na(x))) {
+                    NA
+                  } else {
+                    max(min(lmom::cdfglo(x[1], c(x[2], x[3], x[4])), 0.999), 0.001)
+                  }
+                },
+                # CLUSTER = cl,
+                .fname = "perc"
+              ) |>
+              setNames(str_glue("perc_{k}"))
+          })
 
-  s_1model_wb <-
-    do.call(c, c(s_1model_wb, along = "M"))
+        # return(s_wb_quantile)
+        do.call(c, s_wb_quantile |> unname())
+      })
 
-  write_rds(s_1model_wb, str_glue("{dir_data}/wb-quantiles_{mod}.rds"))
+    s_1model_wb <-
+      do.call(c, c(s_1model_wb, along = "M"))
+
+    write_rds(s_1model_wb, str_glue("{dir_data}/wb-quantiles_{mod}.rds"))
+  }
 })
 
 

@@ -29,8 +29,12 @@ dir_gs_nmme <- "gs://clim_data_reg_useast1/nmme"
 # load nmme data source table
 source("monitor_forecast/nmme_sources_df.R")
 
+# all_dates <-
+#   seq(as_date("1990-12-01"), as_date("2025-08-01"), by = "1 month") |>
+#   as.character()
+
 all_dates <-
-  seq(as_date("1990-12-01"), as_date("2025-08-01"), by = "1 month") |>
+  seq(as_date("1991-01-01"), as_date("2025-08-01"), by = "1 month") |>
   as.character()
 
 
@@ -99,7 +103,9 @@ vars_nmme <-
 message(str_glue("BIAS CORRECTING..."))
 
 # loop through models
-for (mod_i in seq(nrow(df_sources))) {
+# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+for (mod_i in 3) {
+  #seq(nrow(df_sources))) {
   # mod_i = 1
   mod <- df_sources$model[mod_i]
 
@@ -373,7 +379,7 @@ for (mod_i in seq(nrow(df_sources))) {
                 merge()
             })
 
-          tictoc::tic(str_glue("      ... {length(ss_quantile)} members bias adjusted"))
+          tictoc::tic(str_glue("      ... {length(ss_quantiles)} members bias adjusted"))
           if (var == "prec") {
             ss_ba <-
               map(ss_quantiles, \(s) {

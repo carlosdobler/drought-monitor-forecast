@@ -104,9 +104,9 @@ message(str_glue("BIAS CORRECTING..."))
 
 # loop through models
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-for (mod_i in 3) {
+for (mod_i in 1) {
   #seq(nrow(df_sources))) {
-  # mod_i = 1
+  # mod_i = 3
   mod <- df_sources$model[mod_i]
 
   print(str_glue(" "))
@@ -201,8 +201,9 @@ for (mod_i in 3) {
       ### DOWNLOAD DATA ---------------------------------------------------------
 
       if (!date_ic %in% dates_raw) {
+        message(" ")
         print(str_glue(
-          "    ...  downloading + formatting {date_ic}"
+          "    {date_ic} (downloading + formatting)"
         ))
 
         url <-
@@ -259,8 +260,9 @@ for (mod_i in 3) {
         #
       } else if (date_ic %in% dates_raw) {
         #
+        message(" ")
         print(str_glue(
-          "    ...  downloading {date_ic} from bucket"
+          "    {date_ic} (downloading from bucket)"
         ))
 
         f_nmme_raw <-

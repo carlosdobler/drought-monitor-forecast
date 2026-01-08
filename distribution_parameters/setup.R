@@ -1,1 +1,1 @@
-dir_data <- "/mnt/pd-tmp-dist/tmp"
+dir_data <- "/mnt/pd-drought-monitor/"

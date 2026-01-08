@@ -3,28 +3,17 @@
 
 library(tidyverse)
 library(stars)
-library(mirai)
+library(furrr)
 library(lmom)
 
-daemons(parallel::detectCores() - 1)
-cl <- make_cluster(parallel::detectCores() - 1)
+plan(multicore, workers = parallelly::availableCores() - 1)
 
-# set data directory
+
 source("distribution_parameters/setup.R")
-
-# load special functions
 source("functions/general_tools.R")
+source("functions/functions_drought.R")
 source("functions/functions_distributions.R")
-
-# load nmme models table
 source("monitor_forecast/nmme_sources_df.R")
-
-
-# temporary directory to save files
-if (fs::dir_exists(dir_data)) {
-  fs::dir_delete(dir_data)
-}
-fs::dir_create(dir_data)
 
 
 # root cloud path
@@ -35,6 +24,10 @@ date_vector <-
   seq(as_date("1991-01-01"), as_date("2020-12-01"), by = "1 month")
 
 vars <- c("precipitation", "average_temperature")
+
+conv <-
+  (units::set_units(1, month) / units::set_units(1, d)) |>
+  units::drop_units()
 
 
 # loop through models
@@ -55,7 +48,7 @@ for (mod_i in seq(nrow(df_sources))) {
         ))
 
       f <-
-        rt_gs_download_files(f, dir_data)
+        rt_gs_download_files(f, dir_data, quiet = T)
 
       return(f)
       #
@@ -74,87 +67,81 @@ for (mod_i in seq(nrow(df_sources))) {
 
       ff_m |>
         # for each variable
-        iwalk(\(f_m, i) {
+        iwalk(\(f_m, var) {
           # load data
           ss <-
             f_m |>
-            map(read_mdim)
+            future_map(read_mdim)
 
           # pool all members from all years
           ss <-
             do.call(c, c(ss, along = "M"))
 
           # specify vars based on nmme var
-          if (i == "average_temperature") {
+          if (var == "average_temperature") {
             #
-            distr <- lmom::pelgno
+            distribution <- pelgno
             f_base <- "average-temperature_mon_norm-params"
             dir_gs_clim <- "climatologies"
             #
-          } else if (i == "precipitation") {
+          } else if (var == "precipitation") {
             #
-            distr <- lmom::pelgam
+            distribution <- pelgam
             f_base <- "precipitation_mon_gamma-params"
             dir_gs_clim <- "climatologies_monthly_totals"
 
             # convert precip units: mm/d -> mm/month
             ss <-
               ss |>
-              mutate(
-                prec = round(units::set_units(prec, mm / month))
-              )
+              units::drop_units() |>
+              mutate(prec = prec * conv)
             #
           }
 
           param_names <-
-            sample(10, 10, replace = T) |>
-            samlmu() |>
-            distr() |>
-            names()
+            names(distribution(c(1, 0.1, 0.1, 0.1)))
 
           # split lead times
           ss_sliced <-
             seq(dim(ss)["L"]) |>
-            map(\(lead_in) {
+            map(\(i_lead) {
               ss |>
-                slice(L, lead_in) |>
+                slice(L, i_lead) |>
                 units::drop_units()
             })
 
           # for each lead time
           r <-
             ss_sliced |>
-            imap(\(s, lead_in) {
-              message(str_glue(
-                "      PROCESSING VARIABLE {i}  |  LEAD {lead_in}"
-              ))
-
+            future_imap(\(s, i_lead) {
               # fit distributions
               s |>
                 st_apply(
                   c(1, 2),
                   distr_params_apply,
                   param_names = param_names,
-                  distribution = distr,
-                  CLUSTER = cl,
+                  distribution = distribution,
+                  # FUTURE = T,
                   .fname = "params"
                 ) |>
                 split("params")
             })
 
           r <-
-            do.call(c, c(r, along = "L"))
+            do.call(c, c(r, along = "L")) |>
+            st_set_dimensions("L", seq(0, 6))
+          # CHANGE VALUES OF L
 
           # result file name
           f <-
-            str_glue("{dir_data}/nmme_{mod}_{f_base}_1991-2020_{mon}_leads-6.nc")
+            str_glue("{dir_data}/nmme_{mod}_{f_base}_1991-2020_{mon}_leads-7.nc")
 
           # write to disk
           rt_write_nc(r, f)
 
           # move to bucket
           str_glue(
-            "gcloud storage mv {f} gs://clim_data_reg_useast1/nmme/{dir_gs_clim}/{mod}/"
+            "gcloud storage mv {f} {dir_gs}/{dir_gs_clim}/{mod}/"
           ) |>
             system(ignore.stdout = T, ignore.stderr = T)
         })
@@ -163,8 +150,3 @@ for (mod_i in seq(nrow(df_sources))) {
   # clean up
   walk(ff, \(f) walk(f, fs::file_delete))
 }
-
-stop_cluster(cl)
-
-# clean up
-fs::dir_delete(dir_data)

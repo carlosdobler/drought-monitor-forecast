@@ -37,6 +37,8 @@ land_mask <- function(ref_grid) {
     st_warp(ref_grid, method = "max", use_gdal = T) |>
     setNames("land")
 
+  land_r[land_r == 0] <- NA
+
   # format dimensions
   st_dimensions(land_r) <- st_dimensions(ref_grid)[1:2]
 
@@ -46,59 +48,59 @@ land_mask <- function(ref_grid) {
 
 # *****
 
-load_data <- function(
-  dir_origin_cloud, # bucket dir where all vars are located
-  dir_dest_local,
-  date_vector
-) {
-  # Downloads data corresponding to date_vector
-  # from dir_origin_cloud into dir_dest_local. Then
-  # loads it into memory
+# load_data <- function(
+#   dir_origin_cloud, # bucket dir where all vars are located
+#   dir_dest_local,
+#   date_vector
+# ) {
+#   # Downloads data corresponding to date_vector
+#   # from dir_origin_cloud into dir_dest_local. Then
+#   # loads it into memory
 
-  fs::dir_create(dir_dest_local)
+#   if (!fs::dir_exists(dir_dest_local)) {
+#     fs::dir_create(dir_dest_local)
+#   }
 
-  # download data
+#   # download data
 
-  ff <-
-    rt_gs_list_files(dir_origin_cloud) |>
-    str_subset(".nc") |>
-    str_subset(
-      str_flatten(
-        seq(year(first(date_vector)), year(last(date_vector))),
-        "|"
-      )
-    )
+#   ff <-
+#     rt_gs_list_files(dir_origin_cloud) |>
+#     str_subset(".nc") |>
+#     str_subset(
+#       str_flatten(
+#         seq(year(first(date_vector)), year(last(date_vector))),
+#         "|"
+#       )
+#     )
 
-  ff <-
-    rt_gs_download_files(ff, dir_dest_local)
+#   ff <-
+#     rt_gs_download_files(ff, dir_dest_local)
 
-  # load data
+#   # load data
+#   ss <-
+#     ff |>
+#     map(\(f) {
+#       f |>
+#         read_mdim() |>
+#         adrop()
+#     })
 
-  ss <-
-    ff |>
-    future_map(\(f) {
-      read_ncdf(f) |>
-        suppressMessages() |>
-        adrop()
-    })
+#   # concatenate
 
-  # concatenate
+#   ss <-
+#     do.call(c, c(ss, along = "time")) |>
+#     st_set_dimensions("time", values = date_vector)
 
-  ss <-
-    do.call(c, c(ss, along = "time")) |>
-    st_set_dimensions("time", values = date_vector)
+#   # clean up
 
-  # clean up
+#   fs::file_delete(ff)
 
-  fs::dir_delete(dir_dest_local)
-
-  return(ss)
-}
-
+#   return(ss)
+# }
 
 # *****
 
-distr_params_apply <- function(x, ...) {
+distr_params_apply <- function(x, param_names, distribution) {
   # Function to be used in distr_params
   # (inherits arguments from it)
 
@@ -106,9 +108,9 @@ distr_params_apply <- function(x, ...) {
     params <-
       rep(NA, length(param_names)) |>
       set_names(param_names)
-  } else if (length(unique(x)) == 1) {
+  } else if (mean(x == 0) > 0.9) {
     params <-
-      rep(-9999, length(param_names)) |>
+      rep(-99999, length(param_names)) |>
       set_names(param_names)
   } else {
     params <-
@@ -119,77 +121,79 @@ distr_params_apply <- function(x, ...) {
 }
 
 
-distr_params <- function(
-  s,
-  dir_tmp_local,
-  dir_output_cloud,
-  distribution,
-  f_name_root,
-  process
-) {
-  # Fits a distribution, outputs its parameters
+# *****
 
-  fs::dir_create(dir_tmp_local)
+# distr_params <- function(
+#   s,
+#   dir_tmp_local,
+#   dir_output_cloud,
+#   distribution,
+#   f_name_root,
+#   process
+# ) {
+#   # Fits a distribution, outputs its parameters
 
-  param_names <-
-    sample(10, 100, replace = T) |>
-    samlmu() |>
-    distribution() |>
-    names()
+#   fs::dir_create(dir_tmp_local)
 
-  walk(seq(12), \(mon) {
-    print(str_glue("fitting month {mon}"))
+#   # get names from sim l-moments vector
+#   param_names <-
+#     names(distribution(c(1, 0.1, 0.1, 0.1)))
 
-    if (process == "era") {
-      r <-
-        s |>
-        filter(month(time) == mon) |>
-        units::drop_units() |>
+#   walk(seq(12), \(mon) {
+#     print(str_glue("fitting month {mon} / 12"))
 
-        st_apply(
-          c(1, 2),
-          distr_params_apply,
-          FUTURE = T,
-          .fname = "params"
-        ) |>
-        split("params")
-    } else if (process == "nmme") {
-      r <-
-        s |>
-        filter(month(time) == mon) |>
-        units::drop_units() |>
+#     if (process == "era") {
+#       #
+#       r <-
+#         s |>
+#         filter(month(time) == mon) |>
+#         units::drop_units() |>
 
-        st_apply(
-          c(1, 2, 3), # pool all members to fit distr
-          distr_params_apply,
-          FUTURE = T,
-          .fname = "params"
-        ) |>
-        split("params")
-    }
+#         st_apply(
+#           c(1, 2),
+#           distr_params_apply,
+#           param_names = param_names,
+#           distribution = distribution,
+#           FUTURE = T,
+#           .fname = "params"
+#         ) |>
+#         split("params")
+#       #
+#     } else if (process == "nmme") {
+#       #
+#       r <-
+#         s |>
+#         filter(month(time) == mon) |>
+#         units::drop_units() |>
 
-    # save results
+#         st_apply(
+#           c(1, 2, 3), # pool all members to fit distr
+#           distr_params_apply,
+#           param_names = param_names,
+#           distribution = distribution,
+#           FUTURE = T,
+#           .fname = "params"
+#         ) |>
+#         split("params")
+#       #
+#     }
 
-    f <-
-      str_glue(
-        "{dir_tmp_local}/{f_name_root}_{str_pad(mon, 2, 'left', '0')}.nc"
-      )
+#     # save results
 
-    rt_write_nc(
-      r,
-      f,
-      gatt_name = "source code",
-      gatt_val = "https://github.com/carlosdobler/drought/distribution_parameters"
-    )
+#     f <-
+#       str_glue(
+#         "{dir_tmp_local}/{f_name_root}_{str_pad(mon, 2, 'left', '0')}.nc"
+#       )
 
-    # # move to cloud
-    # str_glue("gcloud storage mv {f} {dir_output_cloud}") |>
-    #   system(ignore.stdout = T, ignore.stderr = T)
-  })
+#     rt_write_nc(r, f)
 
-  # fs::dir_delete(dir_tmp_local)
-}
+#     # move to cloud
+#     str_glue("gcloud storage mv {f} {dir_output_cloud}") |>
+#       system(ignore.stdout = T, ignore.stderr = T)
+#   })
 
+#   fs::dir_delete(dir_tmp_local)
+# }
 
 rollsum <- function(s, k, suffix_var) {
   # Calculates a rolling sum of k width over s (stars obj);
@@ -203,7 +207,7 @@ rollsum <- function(s, k, suffix_var) {
     st_apply(
       c(1, 2),
       \(x) {
-        slider::slide_dbl(x, .f = sum, .before = k - 1, .complete = T)
+        slider::slide_sum(x, before = k - 1, complete = T)
       },
       .fname = "time"
     ) |>

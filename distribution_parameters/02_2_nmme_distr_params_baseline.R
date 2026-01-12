@@ -4,26 +4,16 @@
 library(tidyverse)
 library(stars)
 library(furrr)
+library(lmom)
 
-options(future.fork.enable = T)
-options(future.rng.onMisuse = "ignore")
-plan(multicore)
+plan(multicore, workers = parallelly::availableCores() - 1)
 
 
-# load special functions
+source("distribution_parameters/setup.R")
 source("functions/general_tools.R")
-# source("monitor_forecast/functions.R")
-
-# load nmme models table
+source("functions/functions_drought.R")
+source("functions/functions_distributions.R")
 source("monitor_forecast/nmme_sources_df.R")
-
-
-# temporary directory to save files
-dir_tmp <- "/mnt/pers_disk/tmp"
-if (fs::dir_exists(dir_tmp)) {
-  fs::dir_delete(dir_tmp)
-}
-fs::dir_create(dir_tmp)
 
 
 # root cloud path
@@ -35,14 +25,21 @@ date_vector <-
 
 vars <- c("precipitation", "average_temperature")
 
+conv <-
+  (units::set_units(1, month) / units::set_units(1, d)) |>
+  units::drop_units()
+
 
 # loop through models
-for (mod in df_sources$model) {
-  print(str_glue("PROCESSING MODEL {mod}"))
+for (mod_i in seq(nrow(df_sources))) {
+  #
+  mod <- df_sources$model[mod_i]
+  message(str_glue("PROCESSING MODEL {mod} ({mod_i} / {nrow(df_sources)})"))
 
   # download data (precip and tas)
   ff <-
     map(vars |> set_names(), \(var) {
+      #
       f <-
         rt_gs_list_files(str_glue("{dir_gs}/monthly/{mod}/{var}")) |>
         str_subset(str_flatten(
@@ -51,11 +48,10 @@ for (mod in df_sources$model) {
         ))
 
       f <-
-        rt_gs_download_files(f, dir_tmp)
-      # f <-
-      #   str_glue("{dir_tmp}/{fs::path_file(f)}")
+        rt_gs_download_files(f, dir_data, quiet = T)
 
       return(f)
+      #
     })
 
   # loop through months
@@ -71,105 +67,86 @@ for (mod in df_sources$model) {
 
       ff_m |>
         # for each variable
-        iwalk(\(f, i) {
+        iwalk(\(f_m, var) {
           # load data
           ss <-
-            f |>
-            future_map(read_ncdf, proxy = F) |>
-            suppressMessages()
+            f_m |>
+            future_map(read_mdim)
 
           # pool all members from all years
           ss <-
             do.call(c, c(ss, along = "M"))
 
-          # convert precip units: mm -> m (same as ERA5)
-          if (i == "precipitation") {
+          # specify vars based on nmme var
+          if (var == "average_temperature") {
+            #
+            distribution <- pelgno
+            f_base <- "average-temperature_mon_norm-params"
+            dir_gs_clim <- "climatologies"
+            #
+          } else if (var == "precipitation") {
+            #
+            distribution <- pelgam
+            f_base <- "precipitation_mon_gamma-params"
+            dir_gs_clim <- "climatologies_monthly_totals"
+
+            # convert precip units: mm/d -> mm/month
             ss <-
               ss |>
-              mutate(prec = prec |> units::set_units(m / d))
+              units::drop_units() |>
+              mutate(prec = prec * conv)
+            #
           }
 
-          # for each lead step
-          r <-
+          param_names <-
+            names(distribution(c(1, 0.1, 0.1, 0.1)))
+
+          # split lead times
+          ss_sliced <-
             seq(dim(ss)["L"]) |>
-            map(\(lead_in) {
-              print(str_glue(
-                "      PROCESSING VARIABLE {i}  |  LEAD {lead_in}"
-              ))
+            map(\(i_lead) {
+              ss |>
+                slice(L, i_lead) |>
+                units::drop_units()
+            })
 
-              s <-
-                ss |>
-                # subset lead step
-                slice(L, lead_in) |>
-                units::drop_units() |>
-
-                # fit distributions
+          # for each lead time
+          r <-
+            ss_sliced |>
+            future_imap(\(s, i_lead) {
+              # fit distributions
+              s |>
                 st_apply(
                   c(1, 2),
-                  \(x) {
-                    # normal dist for temperature
-                    if (i == "average_temperature") {
-                      if (any(is.na(x))) {
-                        params <- c(xi = NA, alpha = NA, k = NA)
-                      } else {
-                        lmoms <- lmom::samlmu(x)
-                        params <- lmom::pelgno(lmoms)
-                      }
-
-                      # logistic dist for precipitation
-                    } else if (i == "precipitation") {
-                      if (any(is.na(x))) {
-                        params <- c(alpha = NA, beta = NA)
-                      } else if (all(x == 0)) {
-                        params <- c(alpha = -9999, beta = -9999)
-                      } else {
-                        x[x == 0] <- 1e-5 # avoid errors when fitting
-                        lmoms <- lmom::samlmu(x)
-                        params <- lmom::pelgam(lmoms)
-                      }
-                    }
-
-                    return(params)
-                  },
-                  FUTURE = T,
+                  distr_params_apply,
+                  param_names = param_names,
+                  distribution = distribution,
+                  # FUTURE = T,
                   .fname = "params"
                 ) |>
                 split("params")
-
-              return(s)
             })
 
           r <-
-            do.call(c, c(r, along = "L"))
+            do.call(c, c(r, along = "L")) |>
+            st_set_dimensions("L", seq(0, 6))
+          # CHANGE VALUES OF L
 
           # result file name
           f <-
-            case_when(
-              i == "average_temperature" ~
-                str_glue(
-                  "{dir_tmp}/nmme_{mod}_average-temperature_mon_norm-params_1991-2020_{mon}_leads-6.nc"
-                ),
-              i == "precipitation" ~
-                str_glue(
-                  "{dir_tmp}/nmme_{mod}_precipitation_mon_gamma-params_1991-2020_{mon}_leads-6.nc"
-                )
-            )
+            str_glue("{dir_data}/nmme_{mod}_{f_base}_1991-2020_{mon}_leads-7.nc")
 
           # write to disk
           rt_write_nc(r, f)
 
           # move to bucket
           str_glue(
-            "gcloud storage mv {f} gs://clim_data_reg_useast1/nmme/climatologies/{mod}/"
+            "gcloud storage mv {f} {dir_gs}/{dir_gs_clim}/{mod}/"
           ) |>
             system(ignore.stdout = T, ignore.stderr = T)
         })
     })
 
   # clean up
-  walk(ff, \(f) future_walk(f, fs::file_delete))
+  walk(ff, \(f) walk(f, fs::file_delete))
 }
-
-
-# clean up
-fs::dir_delete(dir_tmp)

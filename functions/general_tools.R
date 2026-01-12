@@ -12,7 +12,7 @@ rt_gs_list_files <- function(dir) {
 
   stringr::str_glue("gcloud storage ls {dir}") |>
     # run command
-    system(intern = T)
+    system(intern = T, ignore.stderr = T)
 }
 
 
@@ -155,7 +155,8 @@ rt_write_nc <- function(
   filename,
   calendar = NA,
   gatt_name = NA,
-  gatt_val = NA
+  gatt_val = NA,
+  ...
 ) {
   # create a list to store dimensions
   dims <- vector("list", length(dim(stars_obj)))
@@ -279,7 +280,7 @@ rt_write_nc <- function(
     purrr::map2(
       var_names,
       var_units,
-      ~ ncdf4::ncvar_def(name = .x, units = .y, dim = dims)
+      \(vn, vu) ncdf4::ncvar_def(name = vn, units = vu, dim = dims, ...)
     )
 
   # create NetCDF file
@@ -294,11 +295,13 @@ rt_write_nc <- function(
   # write data to the NetCDF file
   purrr::walk(
     seq_along(var_names),
-    ~ ncdf4::ncvar_put(
-      nc = ncnew,
-      varid = varis[[.x]],
-      vals = stars_obj |> dplyr::select(dplyr::all_of(.x)) |> dplyr::pull()
-    )
+    \(vn) {
+      ncdf4::ncvar_put(
+        nc = ncnew,
+        varid = varis[[vn]],
+        vals = stars_obj |> dplyr::select(dplyr::all_of(vn)) |> dplyr::pull()
+      )
+    }
   )
 
   # close the NetCDF file

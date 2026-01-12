@@ -12,7 +12,7 @@ rt_gs_list_files <- function(dir) {
 
   stringr::str_glue("gcloud storage ls {dir}") |>
     # run command
-    system(intern = T)
+    system(intern = T, ignore.stderr = T)
 }
 
 

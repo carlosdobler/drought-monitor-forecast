@@ -4,27 +4,16 @@
 
 # PRE-PROCESSING STEPS INCLUDE BIAS CORRECTION WITH ERA5 DATA.
 
+message("***** PROCESSING FORECAST *****")
+
 # SETUP -----------------------------------------------------------------------
 
 # load nmme data source table
 source("monitor_forecast/nmme_sources_df.R")
 
-# NMME will generate a forecast with IC = start of a month
-# lead months correspond to following months
-# this means:
-# - by mid-month m, ERA5 data will already be available for m-1
-# - NMME data will be available for m (i.e. date in file name = IC)
-# - actual months in NMME data will be predictions for m+1, m+2, m+3 ...
-
-# date_to_proc <- as.character(as_date(date_to_proc) + months(1))
-
 # date to process = IC; dates of forecast = 6 lead months
 date_ic <- as_date(date_to_proc)
 dates_fcst <- seq(date_ic + months(1), date_ic + months(6), by = "1 month")
-
-
-# generate heat index constants
-heat_vars <- heat_index_var_generator()
 
 
 # ERA5 SECTION ----------------------------------------------------------------
@@ -33,29 +22,39 @@ heat_vars <- heat_index_var_generator()
 # months of water balance prior to the date to process to apply an X-month
 # rolling sum.
 
+message("Preparing ERA5 data...")
+
 vars_era <-
   c(
     "total-precipitation",
     "2m-temperature",
-    str_glue("water-balance-th-rollsum{winds}")
+    str_glue("water-balance-hamon-rollsum{winds}")
   ) |>
   set_names(c("pr", "tas", str_glue("wb_rollsum{winds}")))
+
+clim_dir <-
+  c(
+    "climatologies_monthly_totals",
+    "climatologies",
+    "climatologies_monthly_totals",
+    "climatologies_monthly_totals"
+  )
 
 
 # download ERA5 dist parameters files
 
 ff_era <-
-  map(vars_era, \(var) {
+  map2(vars_era, clim_dir, \(var, dir) {
     #
     f <-
-      rt_gs_list_files(str_glue("{dir_gs_era}/climatologies")) |>
-      str_subset(str_glue("_{var}_")) |>
+      rt_gs_list_files(str_glue("{dir_gs_era}/{dir}")) |>
+      str_subset(str_glue("_{var}_mon")) |>
       str_subset("1991-2020")
 
     # rearrange to follow order of dates_fcst
-    # (instead of numerical)
+    # (instead of alphanumerical)
     f <-
-      str_sub(dates_fcst, -5, -4) |>
+      str_sub(c(date_ic, dates_fcst), -5, -4) |>
       map_chr(\(m) {
         f |> str_subset(str_glue("_{m}"))
       })
@@ -74,21 +73,19 @@ era_params <-
   ff_era |>
   map(\(f) {
     #
-    s <-
-      f |>
+    f |>
       set_names(f |> str_sub(-5, -4)) |>
-      map(read_ncdf) |>
-      suppressMessages()
+      map(read_mdim)
 
-    s <-
-      do.call(c, c(s, along = "L")) |>
-      st_set_dimensions("L", values = dates_fcst)
+    # s <-
+    #   do.call(c, c(s, along = "L")) |>
+    #   st_set_dimensions("L", values = dates_fcst)
 
-    return(s)
+    # return(s)
   })
 
 
-# dates of wb needed for rolling sum (prior to date to proc)
+# dates of wb from ERA5 needed for rolling sum (prior to fcst date)
 dates_era <-
   winds |>
   set_names() |>
@@ -97,24 +94,16 @@ dates_era <-
   })
 
 
-# load wb months for tas and pr for rolling sums
-# (already available in dir_data from monitor script)
-
-era_Xmonths_wb <-
-  map(dates_era, \(dd) {
-    map(dd, \(d) {
-      str_glue("{dir_data}/era5_water-balance-th_mon_{d}.nc") |>
-        read_ncdf() |>
-        suppressMessages()
-    })
-  })
-
+# wb months for tas and pr for rolling sums
+# already available from monitor script: s_era_wb
 
 # NMME SECTION ----------------------------------------------------------------
 
 # Downloads a month of NMME tas and precip data (with a 6-month lead). Bias-adjusts
 # it with ERA5 distr parameters. Calculates water balance. Roll-sums with two
 # previous ERA5 months. Calculates deviations (quantiles).
+
+message("Processing NMME data...")
 
 vars_nmme <-
   c("prec", "tref") |>
@@ -123,18 +112,16 @@ vars_nmme <-
 
 ## BIAS CORRECT PRECIP AND TAS ------------------------------------------------
 
-message(str_glue("BIAS CORRECTING..."))
-
 # loop through models
-walk(df_sources$model |> set_names(), \(mod) {
-  # mod <- df_sources$model[2]
+walk(df_sources$model |> tail(-2) |> set_names(), \(mod) {
+  # mod <- df_sources$model[3]
 
   print(str_glue(" "))
   print(str_glue(
-    "* MODEL {which(mod == df_sources$model)} / {nrow(df_sources)}"
+    "* model {which(mod == df_sources$model)} / {nrow(df_sources)}"
   ))
 
-  s_1model <-
+  ss_nmme_ba <-
     imap(vars_nmme, \(var, v) {
       # var = "prec"
       # v = "pr"
@@ -142,8 +129,8 @@ walk(df_sources$model |> set_names(), \(mod) {
       # var = "tref"
       # v = "tas"
 
-      print(str_glue(
-        "* * VARIABLE {which(var == vars_nmme)} / {length(vars_nmme)}"
+      message(str_glue(
+        "* * bias correcting variable {which(var == vars_nmme)} / {length(vars_nmme)}"
       ))
 
       var_l <-
@@ -160,7 +147,7 @@ walk(df_sources$model |> set_names(), \(mod) {
         nmme_url_generator(mod, date_ic, var, df = df_sources)
 
       f <-
-        str_glue("{dir_data}/nmme_{mod}_{var_l}_mon_ic-{date_ic}_leads-6_pre.nc")
+        str_glue("{dir_data}/nmme_{mod}_{var_l}_mon_ic-{date_ic}_leads-7_pre.nc")
 
       a <- "a" # empty vector
       class(a) <- "try-error" # assign error class
@@ -187,6 +174,12 @@ walk(df_sources$model |> set_names(), \(mod) {
       fcst <-
         nmme_formatter(f, var)
 
+      if (all(is.na(pull(fcst)))) {
+        message("      file with no data - moving on to next variable or model...")
+        fs::file_delete(f)
+        return(NULL)
+      }
+
       # *****
       # save model data for future applications
 
@@ -196,16 +189,27 @@ walk(df_sources$model |> set_names(), \(mod) {
       rt_write_nc(fcst, f_formatted)
 
       str_glue(
-        "gcloud storage mv {f_formatted} gs://clim_data_reg_useast1/nmme/monthly/{mod}/{str_replace(var_l, '-', '_')}/"
+        "gcloud storage mv {f_formatted} {dir_gs_nmme}/monthly/{mod}/{str_replace(var_l, '-', '_')}/"
       ) |>
         system(ignore.stdout = T, ignore.stderr = T)
 
       # *****
 
+      # # remove first lead month
+      # fcst <-
+      #   fcst |>
+      #   filter(L %in% seq(1, 6))
+
+      # convert units
       if (var == "prec") {
+        #
         fcst <-
           fcst |>
-          mutate(prec = prec |> units::set_units(m / d)) # match ERA5 units
+          units::drop_units() |>
+          mutate(
+            prec = prec * conv,
+            prec = units::set_units(prec, mm / month)
+          )
       }
 
       fs::file_delete(f)
@@ -216,11 +220,11 @@ walk(df_sources$model |> set_names(), \(mod) {
         case_when(
           var == "prec" ~
             str_glue(
-              "{dir_gs_nmme}/{mod}/nmme_{mod}_{var_l}_mon_gamma-params_1991-2020_{str_sub(date_ic, 6,7)}_leads-6.nc"
+              "{dir_gs_nmme}/climatologies_monthly_totals/{mod}/nmme_{mod}_{var_l}_mon_gamma-params_1991-2020_{str_sub(date_ic, 6,7)}_leads-7.nc"
             ),
           var == "tref" ~
             str_glue(
-              "{dir_gs_nmme}/{mod}/nmme_{mod}_{var_l}_mon_norm-params_1991-2020_{str_sub(date_ic, 6,7)}_leads-6.nc"
+              "{dir_gs_nmme}/climatologies/{mod}/nmme_{mod}_{var_l}_mon_norm-params_1991-2020_{str_sub(date_ic, 6,7)}_leads-7.nc"
             )
         )
 
@@ -232,23 +236,28 @@ walk(df_sources$model |> set_names(), \(mod) {
         f_nmme_params |>
         read_mdim()
 
-      fs::file_delete(f_nmme_params)
+      # # remove first lead month
+      # nmme_params <-
+      #   nmme_params |>
+      #   filter(L %in% seq(1, 6))
 
-      ### BIAS CORRECTION -----------------------------------------------------
+      fs::file_delete(f_nmme_params)
 
       # loop through lead months
 
       s_1var <-
-        map(seq_along(dates_fcst), \(d_fcst_in) {
+        map(seq(dim(fcst)["L"]), \(d_fcst_in) {
           # d_fcst_in <- 1
 
-          print(str_glue("* * * LEAD {d_fcst_in} / {length(dates_fcst)}"))
+          print(str_glue("* * * lead {d_fcst_in-1}"))
+
+          # month_lead <- month(as_date(date_ic) + months(d_fcst_in))
 
           # era params for 1 lead month
           era_params_1mon <-
             era_params |>
             pluck(v) |>
-            slice(L, d_fcst_in)
+            pluck(d_fcst_in)
 
           # nmme params for 1 lead month
           nmme_params_1mon <-
@@ -261,21 +270,20 @@ walk(df_sources$model |> set_names(), \(mod) {
             units::drop_units() |>
             slice(L, d_fcst_in)
 
-          # bias-adjust 1 lead month
-          s_bias_adj_1mon <-
+          # bundle each nmme member with nmme dist parameters
+          ss_mems <-
             # loop through members
-            map(seq(dim(fcst_1mon)[3]), \(mem) {
-              #
-              print(str_glue("* * * * MEMBER {mem} / {dim(fcst_1mon)[3]}"))
-
-              # calculate quantile of nmme data
-              # based on nmme distributions
-
-              nmme_quantile <-
-                fcst_1mon |>
+            map(seq(dim(fcst_1mon)["M"]), \(mem) {
+              fcst_1mon |>
                 slice(M, mem) |>
                 c(nmme_params_1mon) |>
-                merge() |>
+                merge()
+            })
+
+          # calculate quantiles based on dist parameters
+          ss_quantiles <-
+            map(ss_mems, \(s) {
+              s |>
                 st_apply(
                   c(1, 2),
                   \(x) {
@@ -283,7 +291,7 @@ walk(df_sources$model |> set_names(), \(mod) {
                       NA
                     } else {
                       if (var == "prec") {
-                        if (x[2] == -9999) {
+                        if (x[2] == -99999) {
                           # no precip in historical period
                           NA
                         } else {
@@ -296,10 +304,11 @@ walk(df_sources$model |> set_names(), \(mod) {
                     }
                   },
                   .fname = "quantile"
-                )
-
-              nmme_quantile <-
-                nmme_quantile |>
+                ) |>
+                #
+                # resample to ERA5 resolution
+                # first warp to avoid NAs in row 1439
+                #
                 st_warp(st_as_stars(
                   st_bbox(
                     c(
@@ -313,65 +322,81 @@ walk(df_sources$model |> set_names(), \(mod) {
                   dx = 0.25
                 )) |>
                 st_warp(era_params_1mon)
-
-              # quantile mapping with ERA5
-              # distributions
-
-              fcst_biasadj <-
-                nmme_quantile |>
-                c(era_params_1mon) |>
-                merge() |>
-                st_apply(
-                  c(1, 2),
-                  \(x, var) {
-                    if (any(is.na(x))) {
-                      NA
-                    } else if (x[2] == -9999) {
-                      0
-                    } else {
-                      if (var == "prec") {
-                        lmom::quagam(x[1], c(x[2], x[3]))
-                      } else if (var == "tref") {
-                        lmom::quagno(x[1], c(x[2], x[3], x[4]))
-                      }
-                    }
-                  },
-                  CLUSTER = cl,
-                  var = var,
-                  .fname = {{ var }}
-                )
-
-              return(fcst_biasadj)
             })
 
-          s_bias_adj_1mon <-
-            do.call(c, c(s_bias_adj_1mon, along = "M"))
+          # bundle quantile maps with era parameters
+          ss_quantiles <-
+            map(ss_quantiles, \(s) {
+              s |>
+                c(era_params_1mon) |>
+                merge()
+            })
 
-          return(s_bias_adj_1mon)
+          # calculate bias-adjusted levels
+          if (var == "prec") {
+            ss_ba <-
+              future_map(ss_quantiles, \(s) {
+                s |>
+                  st_apply(
+                    c(1, 2),
+                    \(x) {
+                      if (any(is.na(x))) {
+                        NA
+                      } else if (x[2] == -99999) {
+                        0
+                      } else {
+                        lmom::quagam(x[1], c(x[2], x[3]))
+                      }
+                    },
+                    .fname = {{ var }}
+                  )
+              })
+          } else if (var == "tref") {
+            ss_ba <-
+              map(ss_quantiles, \(s) {
+                s |>
+                  st_apply(
+                    c(1, 2),
+                    \(x) {
+                      if (any(is.na(x))) {
+                        NA
+                      } else {
+                        lmom::quagno(x[1], c(x[2], x[3], x[4]))
+                      }
+                    },
+                    .fname = {{ var }}
+                  )
+              })
+          }
+
+          do.call(c, c(ss_ba, along = "M"))
         })
-
-      s_1var <-
-        do.call(c, c(s_1var, along = "L"))
 
       # *****
       # save ba model data for future applications
 
-      v_name <- names(s_1var)
+      v_name <- names(s_1var[[1]])
       v_un <- units::deparse_unit(pull(fcst))
 
       s_1var_f <-
-        s_1var |>
-        # st_set_dimensions("L", values = as_date(dates_fcst)) |>
-        aperm(c(1, 2, 4, 3)) |>
+        do.call(c, c(s_1var, along = "L")) |>
+        st_set_dimensions("L", values = seq(0, 6)) |>
+        aperm(c("longitude", "latitude", "L", "M")) |>
         mutate(!!sym(v_name) := units::set_units(!!sym(v_name), !!v_un))
 
       f_fcst <-
-        str_glue("{dir_data}/nmme_{mod}_{var_l}_mon_ic-{date_ic}_leads-6_biasadj.nc")
+        str_glue("{dir_data}/nmme_{mod}_{var_l}_mon_ic-{date_ic}_leads-7_biasadj.nc")
 
       rt_write_nc(s_1var_f, f_fcst)
 
+      dir_month <-
+        case_when(
+          var == "prec" ~ "monthly_totals",
+          var == "tref" ~ "monthly"
+        )
+
       str_glue(
-        "gcloud storage mv {f_fcst} gs://clim_data_reg_useast1/nmme/monthly/{mod}/{str_replace(var_l, '-', '_')}_biasadj/"
+        "gcloud storage mv {f_fcst} gs://clim_data_reg_useast1/nmme/{dir_month}/{mod}/{str_replace(var_l, '-', '_')}_biasadj/"
       ) |>
         system(ignore.stdout = T, ignore.stderr = T)
 
@@ -380,196 +405,204 @@ walk(df_sources$model |> set_names(), \(mod) {
       return(s_1var)
     })
 
-  # merge pr and tas
+  # remove lead 0 (first)
 
-  s_1model <-
-    do.call(c, unname(s_1model))
-
-  write_rds(s_1model, str_glue("{dir_data}/bias-corr-vars_{mod}.rds"))
-})
-
-
-## CALCULATE WB AND ITS ANOMALIES ---------------------------------------------
-
-print(str_glue("CALCULATING WB AND ANOMALIES..."))
-
-walk(df_sources$model |> set_names(), \(mod) {
-  # mod = df_sources$model[3]
-  message(" ")
-  message(str_glue(
-    "* MODEL {which(mod == df_sources$model)} / {nrow(df_sources)}"
-  ))
-
-  s_1model <-
-    str_glue("{dir_data}/bias-corr-vars_{mod}.rds") |>
-    read_rds()
-
-  s_1model_wb <-
-    # loop through members
-    map(seq(dim(s_1model)["M"]), \(mem) {
-      # mem = 1
-
-      message(str_glue("* * MEMBER {mem} / {dim(s_1model)['M']}"))
-
-      # tas and pr data
-      s_vars <-
-        s_1model |>
-        slice(M, mem)
-
-      # calculate wb for 6 lead months
-      ss_1mem <-
-        map(seq(dim(s_vars)["L"]), \(d_fcst_in) {
-          wb_calculator_th(
-            dates_fcst[d_fcst_in],
-            s_vars |>
-              select(tref) |>
-              slice(L, d_fcst_in) |>
-              setNames("tas") |>
-              mutate(
-                tas = tas |> units::set_units(K) |> units::set_units(degC)
-              ),
-            s_vars |>
-              select(prec) |>
-              slice(L, d_fcst_in) |>
-              setNames("pr") |>
-              mutate(pr = pr |> units::set_units(m)),
-            heat_vars
-          )
-        })
-
-      # merge ERA 2 months wb with nmme 6 months
-      s_wb_era_nmme <-
-        era_Xmonths_wb |>
-        map(\(e) do.call(c, c(c(e, ss_1mem), along = "L")))
-
-      # rollsum
-      s_wb_rolled <-
-        s_wb_era_nmme |>
-        imap(\(s, k) {
-          k <- as.numeric(k)
-
-          s |>
-            st_apply(
-              c(1, 2),
-              # \(x, k) {
-              \(x) {
-                if (any(is.na(x))) {
-                  rep(NA, length(x))
-                } else {
-                  slider::slide_dbl(x, .f = sum, .before = k - 1, .complete = T)
-                }
-              },
-              # CLUSTER = cl,
-              # k = k,
-              .fname = "L"
-            ) |>
-            aperm(c(2, 3, 1)) |>
-            slice(L, -seq(k - 1)) |> # remove traling 2 first months
-            st_set_dimensions("L", values = dates_fcst) |>
-            setNames(str_glue("wb_rollsum{k}"))
-        })
-
-      # calculate quantiles with ERA5 distr parameters
-      s_wb_quantile <-
-        s_wb_rolled |>
-        imap(\(s, k) {
-          #
-          p <- str_glue("wb_rollsum{k}")
-
-          c(s, pluck(era_params, p)) |>
-            merge() |>
-            st_apply(
-              c(1, 2, 3),
-              \(x) {
-                if (any(is.na(x))) {
-                  NA
-                } else {
-                  max(min(lmom::cdfglo(x[1], c(x[2], x[3], x[4])), 0.999), 0.001)
-                }
-              },
-              # CLUSTER = cl,
-              .fname = "perc"
-            ) |>
-            setNames(str_glue("perc_{k}"))
-        })
-
-      # return(s_wb_quantile)
-      do.call(c, s_wb_quantile |> unname())
+  ss_nmme_ba <-
+    ss_nmme_ba |>
+    map(\(s) {
+      s[-1]
     })
 
-  s_1model_wb <-
-    do.call(c, c(s_1model_wb, along = "M"))
+  # **********************************************
 
-  write_rds(s_1model_wb, str_glue("{dir_data}/wb-quantiles_{mod}.rds"))
+  # CALCULATE WB
+
+  message(str_glue(
+    "* * calculating wb"
+  ))
+
+  ss_pet <-
+    future_map2(dates_fcst, ss_nmme_ba$tas, \(d, s) {
+      pet_calculator_hamon(
+        d,
+        s |>
+          mutate(tref = units::set_units(tref, K))
+      )
+    })
+
+  ss_pet <-
+    ss_pet |>
+    map(\(s) {
+      s |>
+        units::drop_units() |>
+        mutate(pet = pet * conv)
+    })
+
+  ss_nmme_wb <-
+    map2(ss_nmme_ba$pr, ss_pet, \(s_pr, s_pet) {
+      s <- s_pr - s_pet
+      s |>
+        setNames("wb")
+    })
+
+  # split by members
+  ss_nmme_wb <-
+    map(ss_nmme_wb, \(s) {
+      map(seq(dim(s)["M"]), \(mem) {
+        slice(s, "M", mem)
+      })
+    }) |>
+    transpose()
+
+  # calculate wb quantiles
+
+  walk(winds, \(k) {
+    #
+    message(str_glue("* * calculating percentiles window {k}"))
+
+    era_params_wb_rolled <-
+      era_params |>
+      pluck(str_glue("wb_rollsum{k}")) |>
+      _[-1]
+
+    # merge wb nmme with wb era5 prior months
+    # (list of members)
+    ss_era_nmme_wb <-
+      ss_nmme_wb |>
+      map(\(ss_mem) {
+        c(
+          s_era_wb |>
+            units::drop_units() |>
+            filter(time %in% (dates_era |> pluck(as.character(k)))),
+          do.call(c, c(ss_mem, along = "time")) |>
+            st_set_dimensions("time", values = dates_fcst)
+        )
+      })
+
+    ss_era_nmme_wb_rolled <-
+      ss_era_nmme_wb |>
+      future_map(\(s) {
+        #
+        s |>
+          st_apply(
+            c(1, 2),
+            \(x) {
+              r <- slider::slide_sum(x, before = k - 1, complete = T)
+              tail(r, -k + 1)
+            },
+            .fname = "time"
+          ) |>
+          aperm(c(2, 3, 1))
+      })
+
+    # split by lead times and merge with parameters
+    ss_wb_perc <-
+      ss_era_nmme_wb_rolled |>
+      map(\(s_wb) {
+        seq(dim(s_wb)["time"]) |>
+          map(\(l) {
+            c(
+              s_wb |>
+                slice(time, l),
+              era_params_wb_rolled[[l]]
+            ) |>
+              merge()
+          })
+      }) |>
+
+      # calculate percentiles
+      imap(\(ss_mem, i) {
+        message(str_glue("* * * member {i} / {length(ss_era_nmme_wb)}"))
+
+        ss_wb_perc_1mem <-
+          ss_mem |>
+          future_map(\(s) {
+            s |>
+              st_apply(
+                c(1, 2),
+                \(x) {
+                  if (any(is.na(x))) {
+                    NA
+                  } else {
+                    max(min(lmom::cdfglo(x[1], c(x[2], x[3], x[4])), 0.999), 0.001)
+                  }
+                },
+                .fname = "perc"
+              )
+          })
+
+        do.call(c, c(ss_wb_perc_1mem, along = "L"))
+      })
+
+    do.call(c, c(ss_wb_perc, along = "M")) |>
+      write_rds(str_glue("{dir_data}/wb-quantiles-w{k}_{mod}.rds"))
+  })
 })
 
 
 # FINAL STATS
 
-ff_wb_quantiles_all_models <-
-  # str_glue("{dir_data}/wb-quantiles_{df_sources$model}.rds")                # **********
-  fs::dir_ls(dir_data, regexp = "wb-quantiles_")
+message("Calculating ensemble stats...")
+
+ff_wb_quantiles <-
+  fs::dir_ls(dir_data, regexp = "wb-quantiles")
 
 wb_quantiles <-
-  ff_wb_quantiles_all_models |>
-  map(\(f) read_rds(f))
+  winds |>
+  set_names() |>
+  map(\(k) {
+    ff_wb_quantiles |>
+      str_subset(str_glue("-w{k}_")) |>
+      map(read_rds)
+  })
 
+# remove empty models
 wb_quantiles <-
-  do.call(c, c(wb_quantiles, along = "M"))
-
-
-wb_quantiles_stats <-
   wb_quantiles |>
-  st_apply(
-    c(1, 2, 3),
-    \(x) {
-      if (all(is.na(x))) {
-        # c(mean = NA, mode = NA, agree = NA, `5%` = NA, `20%` = NA, `50%` = NA, `80%` = NA, `95%` = NA)
-        c(`5%` = NA, `20%` = NA, `50%` = NA, `80%` = NA, `95%` = NA)
-      } else {
-        # mean_perc <- mean(x, na.rm = T) |> round(2)
-        #
-        # # mode (most common decile)
-        # mode_perc <-
-        #   cut(x, seq(0,1,0.1), labels = seq(0,0.9,0.1)) |>
-        #   table() |>
-        #   which.max() |>
-        #   names() |>
-        #   as.numeric() # lower bound
-        #
-        #
-        # # # how many members are in the same tercile as the mean
-        # # upper_lim <- ceiling(mean_perc / (1/3)) * (1/3)
-        # # agree <- mean(x < upper_lim & x > (upper_lim-(1/3)))
-        #
-        # # how many memebers are in the same quartile, centered on the (NOT:most common decile) median
-        # # add 0.05 to center the bin
-        # # agree <- round(mean(x < mean_perc+0.05+(1/4/2) & x > mean_perc+0.05-(1/4/2))*100)
-        # # agree <- round(mean(x < mode_perc+0.2 & x > mode_perc-0.1)*100)
-        # agree <- round(mean(x < median(x, na.rm = T)+0.15 & x > median(x, na.rm = T)-0.15)*100)
+  map(\(ss) {
+    ss[map_lgl(ss, \(s) is(s, "stars"))]
+  })
 
-        q <- quantile(x, c(0.05, 0.2, 0.5, 0.8, 0.95), na.rm = T) |> round(2)
+wb_quantiles <-
+  wb_quantiles |>
+  map(\(ss) {
+    do.call(c, c(ss, along = "M"))
+  })
 
-        # c(mean = mean_perc, mode = mode_perc+0.05, agree = agree, q)
-        return(q)
-      }
-    },
-    .fname = "stats"
-  )
+wb_quantiles |>
+  iwalk(\(ss, k) {
+    message(str_glue("* window {k}"))
+    r <-
+      ss |>
+      st_apply(
+        c("longitude", "latitude", "L"),
+        \(x) {
+          if (all(is.na(x))) {
+            c(`5%` = NA, `20%` = NA, `50%` = NA, `80%` = NA, `95%` = NA)
+          } else {
+            q <- quantile(x, c(0.05, 0.2, 0.5, 0.8, 0.95), na.rm = T) |> round(2)
+            return(q)
+          }
+        },
+        .fname = "stats"
+      ) |>
+      split("stats") |>
+      st_set_dimensions("L", values = dates_fcst)
 
+    f_name <-
+      str_glue(
+        "{dir_data}/nmme_ensemble_water-balance-perc-w{k}_mon_ic-{date_ic}_leads-6.nc"
+      )
 
-c(3, 12) |>
-  iwalk(\(k, i) {
-    f_name <- str_glue(
-      "{dir_data}/nmme_ensemble_water-balance-perc-w{k}_mon_ic-{date_ic}_leads-6.nc"
-    )
-
-    rt_write_nc(
-      wb_quantiles_stats |> select(i) |> split("stats"),
-      f_name
-    )
+    rt_write_nc(r, f_name)
 
     "gcloud storage mv {f_name} gs://drought-monitor/forecast/" |>
       str_glue() |>
       system(ignore.stdout = T, ignore.stderr = T)
   })
+
+ff_era |>
+  walk(fs::file_delete)
+
+ff_wb_quantiles |>
+  fs::file_delete()

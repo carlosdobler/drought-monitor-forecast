@@ -16,7 +16,7 @@ if (date_to_proc %in% existing_dates_final_bucket) {
 # vector of all dates necessary to calculate rolling sum
 pre_dates <-
   seq(
-    as_date(date_to_proc) - months(12 - 1), # max integration window
+    as_date(date_to_proc) - months(max(winds) - 1), # max integration window
     as_date(date_to_proc),
     by = "1 month"
   )
@@ -146,12 +146,12 @@ if (length(f_wb) > 0) {
     f_wb |>
     str_sub(-13, -4)
 
-  s_wb_disk <-
+  s_era_wb_disk <-
     f_wb |>
     map(read_mdim)
 
-  s_wb_disk <-
-    do.call(c, c(s_wb_disk, along = "time")) |>
+  s_era_wb_disk <-
+    do.call(c, c(s_era_wb_disk, along = "time")) |>
     st_set_dimensions("time", values = as_date(dates_wb))
 }
 
@@ -200,7 +200,7 @@ s_pr <-
     tp = units::set_units(tp, mm / month)
   )
 
-s_wb <-
+s_era_wb <-
   c(s_pr, s_pet) |>
   mutate(wb = tp - pet) |>
   select(wb)
@@ -210,7 +210,7 @@ dates_missing_wb |>
   walk(\(d) {
     f <- str_glue("{dir_data}/era5_water-balance-hamon_mon_{d}.nc")
 
-    s_wb |>
+    s_era_wb |>
       filter(time == d) |>
       adrop() |>
       rt_write_nc(f)
@@ -222,22 +222,22 @@ dates_missing_wb |>
 # COMBINE WITH WB IN DISK
 
 if (length(f_wb) > 0) {
-  s_wb <-
-    c(s_wb_disk, s_wb)
+  s_era_wb <-
+    c(s_era_wb_disk, s_era_wb)
 }
 
 
 # CALCULATE PERCENTILES (QUANTILE)
 
 # loop through integration windows
-for (k in c(12, 3)) {
+walk(winds, \(k) {
   message(str_glue("*** PROCESSING {date_to_proc} (window = {k}) ***"))
 
   pre_dates_k <- pre_dates |> tail(k)
 
   # aggregate (rollsum)
   s_wb_rolled <-
-    s_wb |>
+    s_era_wb |>
     filter(time %in% pre_dates_k) |>
     st_apply(c(1, 2), sum, .fname = str_glue("wb_rollsum{k}"))
 
@@ -301,9 +301,16 @@ for (k in c(12, 3)) {
   # upload to cloud
   str_glue("gcloud storage mv {res_file} gs://drought-monitor/historical/") |>
     system(ignore.stdout = T, ignore.stderr = T)
-}
+})
 
-# clean up
-dir_data |>
-  fs::dir_ls() |>
+
+f_wb |>
   fs::file_delete()
+
+c("total-precipitation", "2m-temperature") |>
+  walk(\(v) {
+    dir_data |>
+      fs::dir_ls() |>
+      str_subset(v) |>
+      fs::file_delete()
+  })

@@ -1,114 +1,170 @@
-heat_index_var_generator <- function() {
-  # download climatological annual heat index file
-  # (generated with `monitor_forecast/annual_heat_index_era.R` script)
+# heat_index_var_generator <- function() {
+#   # download climatological annual heat index file
+#   # (generated with `monitor_forecast/annual_heat_index_era.R` script)
 
-  stringr::str_glue(
-    "gcloud storage cp gs://clim_data_reg_useast1/era5/climatologies/era5_heat-index_yr_1991-2020.nc {tempdir()}"
-  ) |>
-    system(ignore.stderr = T, ignore.stdout = T)
+#   stringr::str_glue(
+#     "gcloud storage cp gs://clim_data_reg_useast1/era5/climatologies/era5_heat-index_yr_1991-2020.nc {tempdir()}"
+#   ) |>
+#     system(ignore.stderr = T, ignore.stdout = T)
 
-  # read file
-  s_hi <-
-    stringr::str_glue("{tempdir()}/era5_heat-index_yr_1991-2020.nc") |>
-    stars::read_ncdf() |>
-    suppressMessages() |>
-    dplyr::mutate(ann_h_ind = round(ann_h_ind, 2))
+#   # read file
+#   s_hi <-
+#     stringr::str_glue("{tempdir()}/era5_heat-index_yr_1991-2020.nc") |>
+#     stars::read_ncdf() |>
+#     suppressMessages() |>
+#     dplyr::mutate(ann_h_ind = round(ann_h_ind, 2))
 
-  # delete file
-  fs::file_delete(stringr::str_glue(
-    "{tempdir()}/era5_heat-index_yr_1991-2020.nc"
-  ))
+#   # delete file
+#   fs::file_delete(stringr::str_glue(
+#     "{tempdir()}/era5_heat-index_yr_1991-2020.nc"
+#   ))
 
-  # calculate alpha
-  s_alpha <-
-    s_hi |>
-    dplyr::mutate(
-      alpha = (6.75e-7 * ann_h_ind^3) -
-        (7.71e-5 * ann_h_ind^2) +
-        0.01792 * ann_h_ind +
-        0.49239
-    ) |>
-    dplyr::select(alpha)
+#   # calculate alpha
+#   s_alpha <-
+#     s_hi |>
+#     dplyr::mutate(
+#       alpha = (6.75e-7 * ann_h_ind^3) -
+#         (7.71e-5 * ann_h_ind^2) +
+#         0.01792 * ann_h_ind +
+#         0.49239
+#     ) |>
+#     dplyr::select(alpha)
 
-  # calculate daylight duration (one for each calendar month)
-  # reference for coefficients:
-  # https://github.com/sbegueria/SPEI/blob/master/R/thornthwaite.R#L128-L140
+#   # calculate daylight duration (one for each calendar month)
+#   # reference for coefficients:
+#   # https://github.com/sbegueria/SPEI/blob/master/R/thornthwaite.R#L128-L140
 
-  K_mon <-
-    purrr::map2(
-      seq(15, 365, by = 30), # Julian day (mid-point)
-      c(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31), # days/month
-      \(J, days_in_mon) {
-        s_hi |>
-          stars::st_dim_to_attr(2) |>
-          dplyr::mutate(
-            tanLat = tan(latitude / 57.2957795),
-            Delta = 0.4093 * sin(((2 * pi * J) / 365) - 1.405),
-            tanDelta = tan(Delta),
-            tanLatDelta = tanLat * tanDelta,
-            tanLatDelta = ifelse(tanLatDelta < (-1), -1, tanLatDelta),
-            tanLatDelta = ifelse(tanLatDelta > 1, 1, tanLatDelta),
-            omega = acos(-tanLatDelta),
-            N = 24 / pi * omega,
-            K = N / 12 * days_in_mon / 30
-          ) |>
-          dplyr::select(K)
-      }
-    )
+#   K_mon <-
+#     purrr::map2(
+#       seq(15, 365, by = 30), # Julian day (mid-point)
+#       c(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31), # days/month
+#       \(J, days_in_mon) {
+#         s_hi |>
+#           stars::st_dim_to_attr(2) |>
+#           dplyr::mutate(
+#             tanLat = tan(latitude / 57.2957795),
+#             Delta = 0.4093 * sin(((2 * pi * J) / 365) - 1.405),
+#             tanDelta = tan(Delta),
+#             tanLatDelta = tanLat * tanDelta,
+#             tanLatDelta = ifelse(tanLatDelta < (-1), -1, tanLatDelta),
+#             tanLatDelta = ifelse(tanLatDelta > 1, 1, tanLatDelta),
+#             omega = acos(-tanLatDelta),
+#             N = 24 / pi * omega,
+#             K = N / 12 * days_in_mon / 30
+#           ) |>
+#           dplyr::select(K)
+#       }
+#     )
 
-  r <- list(s_hi = s_hi, s_alpha = s_alpha, K_mon = K_mon)
+#   r <- list(s_hi = s_hi, s_alpha = s_alpha, K_mon = K_mon)
 
-  return(r)
-}
-
+#   return(r)
+# }
 
 # *****
 
-wb_calculator_th <- function(d, s_tas, s_pr, heat_vars) {
-  # Calculate PET with Thornwhaite formulation, then calculate
-  # water balance
+pet_calculator_hamon <- function(d, s_tas) {
+  #
+  s_tas <-
+    s_tas |>
+    setNames("tas")
 
-  # ARGUMENTS:
-  # * d = date to process
-  # * s_tas = stars obj of average temp; variable should be named tas with units degC
-  # * s_pr = stars obj of mean daily precip; variable should be named pr with units m
-  # * heat_vars = list obtained with heat_index_generator function
-  # * tas_pr = should underlying tas and pr data be provided?
+  un <-
+    units::deparse_unit(pull(s_tas))
 
-  # calculate PET
+  if (un != "degC" & un != "°C") {
+    s_tas <-
+      s_tas |>
+      mutate(tas = units::set_units(tas, degC))
+  }
+
+  J <- yday(d)
+
+  s_lat <-
+    s_tas |>
+    st_dim_to_attr(2) |>
+    setNames("lat")
+
+  s_D <-
+    s_lat |>
+    mutate(
+      lat_rad = lat * pi / 180,
+      tan_lat = tan(lat_rad),
+      delta = 0.4093 * sin(((2 * pi * J) / 365) - 1.405),
+      tan_delta = tan(delta),
+      tan_lat_delta = tan_lat * tan_delta,
+      tan_lat_delta = ifelse(tan_lat_delta < -1, -1, tan_lat_delta),
+      tan_lat_delta = ifelse(tan_lat_delta > 1, 1, tan_lat_delta),
+      omega = acos(-tan_lat_delta),
+      N = 24 / pi * omega,
+      D = N / 12
+    ) |>
+    select(D)
+
+  s_pt <-
+    s_tas |>
+    units::drop_units() |>
+    mutate(
+      esat = 6.108 * exp((17.3 * tas) / (tas + 237.3)),
+      pt = 216.7 * esat / (tas + 273)
+    ) |>
+    select(pt)
+
   s_pet <-
-    c(
-      s_tas |> units::drop_units(),
-      heat_vars$s_hi,
-      heat_vars$s_alpha,
-      purrr::pluck(heat_vars$K_mon, lubridate::month(d))
-    ) |>
+    c(s_D, s_pt) |>
+    mutate(pet = 0.1651 * D * pt, pet = units::set_units(pet, mm / d)) |>
+    select(pet)
 
-    dplyr::mutate(
-      tas = dplyr::if_else(tas < 0, 0, tas),
-      pet = K * 16 * (10 * tas / ann_h_ind)^alpha,
-      pet = dplyr::if_else(is.na(pet) | is.infinite(pet), 0, pet),
-      pet = pet |> units::set_units(mm) |> units::set_units(m),
-      pet = pet /
-        lubridate::days_in_month(stringr::str_glue(
-          "1970-{lubridate::month(d)}-01"
-        ))
-    ) |>
-    dplyr::select(pet)
-
-  # calculate water balance
-  s_wb <-
-    c(s_pr, s_pet) |>
-    dplyr::mutate(wb = pr - pet) |>
-    dplyr::select(wb)
-
-  return(s_wb)
+  return(s_pet)
 }
 
 
 # *****
 
-nmme_url_generator <- function(model, date, variable, lead = 6, df) {
+# wb_calculator_th <- function(d, s_tas, s_pr, heat_vars) {
+#   # Calculate PET with Thornwhaite formulation, then calculate
+#   # water balance
+
+#   # ARGUMENTS:
+#   # * d = date to process
+#   # * s_tas = stars obj of average temp; variable should be named tas with units degC
+#   # * s_pr = stars obj of mean daily precip; variable should be named pr with units m
+#   # * heat_vars = list obtained with heat_index_generator function
+#   # * tas_pr = should underlying tas and pr data be provided?
+
+#   # calculate PET
+#   s_pet <-
+#     c(
+#       s_tas |> units::drop_units(),
+#       heat_vars$s_hi,
+#       heat_vars$s_alpha,
+#       purrr::pluck(heat_vars$K_mon, lubridate::month(d))
+#     ) |>
+
+#     dplyr::mutate(
+#       tas = dplyr::if_else(tas < 0, 0, tas),
+#       pet = K * 16 * (10 * tas / ann_h_ind)^alpha,
+#       pet = dplyr::if_else(is.na(pet) | is.infinite(pet), 0, pet),
+#       pet = pet |> units::set_units(mm) |> units::set_units(m),
+#       pet = pet /
+#         lubridate::days_in_month(stringr::str_glue(
+#           "1970-{lubridate::month(d)}-01"
+#         ))
+#     ) |>
+#     dplyr::select(pet)
+
+#   # calculate water balance
+#   s_wb <-
+#     c(s_pr, s_pet) |>
+#     dplyr::mutate(wb = pr - pet) |>
+#     dplyr::select(wb)
+
+#   return(s_wb)
+# }
+
+# *****
+
+nmme_url_generator <- function(model, date, variable, leads = 7, df) {
   # Function to generate an url to download forecast data from IRI
 
   # ARGUMENTS:
@@ -144,14 +200,14 @@ nmme_url_generator <- function(model, date, variable, lead = 6, df) {
 
   # glue everything together
   stringr::str_glue(
-    "https://iridl.ldeo.columbia.edu/SOURCES/.Models/.NMME/.{model_cast}/.MONTHLY/.{variable}/L/%280.5%29%28{lead-1}.5%29RANGEEDGES/S/%280000%201%20{format(d,'%b')}%20{lubridate::year(d)}%29VALUES/M/%281.0%29%2810.0%29RANGEEDGES/data.nc"
+    "https://iridl.ldeo.columbia.edu/SOURCES/.Models/.NMME/.{model_cast}/.MONTHLY/.{variable}/L/%280.5%29%28{leads-1}.5%29RANGEEDGES/S/%280000%201%20{format(d,'%b')}%20{lubridate::year(d)}%29VALUES/M/%281.0%29%2810.0%29RANGEEDGES/data.nc"
   )
 }
 
 
 # *****
 
-nmme_formatter <- function(f, variable, lead = 6) {
+nmme_formatter <- function(f, variable, leads = 7) {
   # Function to format IRI's ncdfs into a simpler form:
   # four dimensions only (lat, lon, member, lead) and with
   # existing units
@@ -175,7 +231,7 @@ nmme_formatter <- function(f, variable, lead = 6) {
     stars::read_mdim() |>
     suppressWarnings() |>
     abind::adrop() |>
-    stars::st_set_dimensions("L", values = seq(lead)) # simplify lead dimension
+    stars::st_set_dimensions("L", values = (seq(leads) - 1)) # simplify lead dimension
 
   if (un == "Kelvin_scale") {
     s <-

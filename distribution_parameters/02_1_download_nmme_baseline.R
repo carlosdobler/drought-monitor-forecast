@@ -17,7 +17,7 @@ vars_long <- c("average-temperature", "precipitation")
 
 # PROCESS ---------------------------------------------------------------------
 
-for (i in seq_along(vars)[2]) {
+for (i in seq_along(vars)) {
   var <- vars[i]
   var_l <- vars_long[i]
 
